@@ -14,7 +14,7 @@
 
 use crate::config::{MailConfig, MailTransport, SmtpTls};
 use futures_util::future::BoxFuture;
-use lettre::message::Mailbox;
+use lettre::message::{Mailbox, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::fmt;
@@ -124,7 +124,9 @@ fn build_message(from: &Mailbox, msg: &MailMessage) -> anyhow::Result<Message> {
         .from(from.clone())
         .to(to)
         .subject(msg.subject.clone())
-        .body(msg.body.clone())?)
+        // Declare MIME 1.0 and text/plain; charset=utf-8, so mail clients
+        // decode Cyrillic instead of guessing a legacy charset.
+        .singlepart(SinglePart::plain(msg.body.clone()))?)
 }
 
 #[derive(Debug)]
@@ -322,6 +324,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn all_templates_declare_utf8_mime_on_the_wire() {
+        let from = "ConsoleCrypt <no-reply@example.org>".parse().unwrap();
+        let token = format!("cct_{}", uuid::Uuid::new_v4().simple());
+        let url = Some("https://example.org");
+        let messages = [
+            templates::verify_email("a@example.org", &token, url),
+            templates::password_reset("a@example.org", &token, false, url),
+            templates::password_reset("a@example.org", &token, true, url),
+            templates::device_revoked("a@example.org", "Мой ноутбук", url),
+            templates::password_changed("a@example.org", url),
+        ];
+        for msg in messages {
+            let wire = String::from_utf8(build_message(&from, &msg).unwrap().formatted()).unwrap();
+            let (headers, _) = wire.split_once("\r\n\r\n").unwrap();
+            // Decoding bytes as UTF-8 in a test is insufficient: email clients
+            // need both MIME and an explicit charset to choose that decoder.
+            assert!(headers.lines().any(|line| line == "MIME-Version: 1.0"));
+            assert!(headers.lines().any(|line| {
+                line.eq_ignore_ascii_case("Content-Type: text/plain; charset=utf-8")
+            }));
+        }
+    }
+
+    #[test]
     fn debug_redacts_body() {
         let m = templates::verify_email("a@example.org", "cct_SECRET", None);
         assert!(!format!("{m:?}").contains("SECRET"));
@@ -334,10 +360,10 @@ mod tests {
             dir: dir.clone(),
             from: "ConsoleCrypt <no-reply@localhost>".parse().unwrap(),
         };
-        mailer
-            .send(templates::verify_email("a@example.org", "cct_TOKEN", None))
-            .await
-            .unwrap();
+        let token = format!("cct_{}", uuid::Uuid::new_v4().simple());
+        let msg = templates::verify_email("a@example.org", &token, None);
+        let expected_body = msg.body.replace('\n', "\r\n");
+        mailer.send(msg).await.unwrap();
         let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
@@ -345,11 +371,13 @@ mod tests {
         // UTF-8 templates are MIME/base64 encoded by lettre. Check the
         // decoded wire body, not whether an ASCII token survived encoding.
         use base64::Engine as _;
-        let (_, body) = content.split_once("\r\n\r\n").unwrap();
+        let (headers, body) = content.split_once("\r\n\r\n").unwrap();
+        assert!(headers.contains("Content-Type: text/plain; charset=utf-8\r\n"));
+        assert!(headers.contains("Content-Transfer-Encoding: base64"));
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(body.split_whitespace().collect::<String>())
             .unwrap();
-        assert!(String::from_utf8(decoded).unwrap().contains("cct_TOKEN"));
+        assert_eq!(String::from_utf8(decoded).unwrap(), expected_body);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
