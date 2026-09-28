@@ -14,7 +14,7 @@
 
 use crate::config::{MailConfig, MailTransport, SmtpTls};
 use futures_util::future::BoxFuture;
-use lettre::message::Mailbox;
+use lettre::message::{Mailbox, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::fmt;
@@ -124,7 +124,9 @@ fn build_message(from: &Mailbox, msg: &MailMessage) -> anyhow::Result<Message> {
         .from(from.clone())
         .to(to)
         .subject(msg.subject.clone())
-        .body(msg.body.clone())?)
+        // Declare MIME 1.0 and text/plain; charset=utf-8, so mail clients
+        // decode Cyrillic instead of guessing a legacy charset.
+        .singlepart(SinglePart::plain(msg.body.clone()))?)
 }
 
 #[derive(Debug)]
@@ -226,7 +228,8 @@ impl Mailer for SmtpMailer {
     }
 }
 
-/// Message templates. Plain text; tokens are pasted into the client app.
+/// Plain-text messages work in both the app and web account. Codes in web
+/// links are fragments, so they do not enter HTTP access logs.
 pub mod templates {
     use super::{MailKind, MailMessage};
 
@@ -237,14 +240,26 @@ pub mod templates {
         }
     }
 
+    fn account_link(public_url: Option<&str>, action: &str, token: &str) -> String {
+        public_url
+            .map(|url| {
+                format!(
+                    "\n\nОткрыть личный кабинет:\n{}/account#action={action}&token={token}",
+                    url.trim_end_matches('/')
+                )
+            })
+            .unwrap_or_default()
+    }
+
     pub fn verify_email(to: &str, token: &str, public_url: Option<&str>) -> MailMessage {
         MailMessage {
             kind: MailKind::VerifyEmail,
             to: to.to_owned(),
-            subject: "Verify your ConsoleCrypt email address".to_owned(),
+            subject: "ConsoleCrypt — подтвердите email".to_owned(),
             body: format!(
-                "Paste this verification code into the ConsoleCrypt app:\n\n    {token}\n\n\
-                 If you did not create an account, ignore this message.{}",
+                "Подтвердите email в ConsoleCrypt. Вставьте этот код в приложение или личный кабинет:\n\n    {token}\n\n\
+                 Если вы не создавали аккаунт, просто проигнорируйте это письмо.{}{}",
+                account_link(public_url, "verify", token),
                 footer(public_url)
             ),
         }
@@ -263,13 +278,14 @@ pub mod templates {
                 MailKind::PasswordReset
             },
             to: to.to_owned(),
-            subject: "Reset your ConsoleCrypt account password".to_owned(),
+            subject: "ConsoleCrypt — восстановление доступа".to_owned(),
             body: format!(
-                "Paste this code into the ConsoleCrypt app to set a new account password:\n\n    {token}\n\n\
-                 It expires soon and can be used once. Resetting the account password signs out \
-                 all devices but does not unlock your vault: you still need your vault passphrase, \
-                 your Recovery Key or a trusted device.\n\n\
-                 If you did not request this, ignore this message.{}",
+                "Для изменения пароля аккаунта ConsoleCrypt вставьте этот одноразовый код:\n\n    {token}\n\n\
+                 Код действует ограниченное время. После смены пароля все сеансы будут завершены. \
+                 Это не разблокирует хранилище: для него нужна парольная фраза, \
+                 ключ восстановления или доверенное устройство.\n\n\
+                 Если вы не запрашивали восстановление, проигнорируйте это письмо.{}{}",
+                if recovery { String::new() } else { account_link(public_url, "reset", token) },
                 footer(public_url)
             ),
         }
@@ -308,6 +324,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn all_templates_declare_utf8_mime_on_the_wire() {
+        let from = "ConsoleCrypt <no-reply@example.org>".parse().unwrap();
+        let token = format!("cct_{}", uuid::Uuid::new_v4().simple());
+        let url = Some("https://example.org");
+        let messages = [
+            templates::verify_email("a@example.org", &token, url),
+            templates::password_reset("a@example.org", &token, false, url),
+            templates::password_reset("a@example.org", &token, true, url),
+            templates::device_revoked("a@example.org", "Мой ноутбук", url),
+            templates::password_changed("a@example.org", url),
+        ];
+        for msg in messages {
+            let wire = String::from_utf8(build_message(&from, &msg).unwrap().formatted()).unwrap();
+            let (headers, _) = wire.split_once("\r\n\r\n").unwrap();
+            // Decoding bytes as UTF-8 in a test is insufficient: email clients
+            // need both MIME and an explicit charset to choose that decoder.
+            assert!(headers.lines().any(|line| line == "MIME-Version: 1.0"));
+            assert!(headers.lines().any(|line| {
+                line.eq_ignore_ascii_case("Content-Type: text/plain; charset=utf-8")
+            }));
+        }
+    }
+
+    #[test]
     fn debug_redacts_body() {
         let m = templates::verify_email("a@example.org", "cct_SECRET", None);
         assert!(!format!("{m:?}").contains("SECRET"));
@@ -320,15 +360,24 @@ mod tests {
             dir: dir.clone(),
             from: "ConsoleCrypt <no-reply@localhost>".parse().unwrap(),
         };
-        mailer
-            .send(templates::verify_email("a@example.org", "cct_TOKEN", None))
-            .await
-            .unwrap();
+        let token = format!("cct_{}", uuid::Uuid::new_v4().simple());
+        let msg = templates::verify_email("a@example.org", &token, None);
+        let expected_body = msg.body.replace('\n', "\r\n");
+        mailer.send(msg).await.unwrap();
         let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("cct_TOKEN"));
+        // UTF-8 templates are MIME/base64 encoded by lettre. Check the
+        // decoded wire body, not whether an ASCII token survived encoding.
+        use base64::Engine as _;
+        let (headers, body) = content.split_once("\r\n\r\n").unwrap();
+        assert!(headers.contains("Content-Type: text/plain; charset=utf-8\r\n"));
+        assert!(headers.contains("Content-Transfer-Encoding: base64"));
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(body.split_whitespace().collect::<String>())
+            .unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), expected_body);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;

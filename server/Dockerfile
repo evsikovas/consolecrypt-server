@@ -31,7 +31,7 @@ LABEL org.opencontainers.image.title="consolecrypt-server" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.authors="Alexander Evsikov <i@evsikov.net>" \
       org.opencontainers.image.vendor="Alexander Evsikov" \
-      org.opencontainers.image.source="https://github.com/consolecrypt/consolecrypt"
+      org.opencontainers.image.source="https://git.evsikov.net/publics/consolecrypt"
 COPY --from=build /consolecrypt-server /usr/local/bin/consolecrypt-server
 USER 65532:65532
 ENV CC_LISTEN_ADDR=0.0.0.0:8080 \
