@@ -1,8 +1,15 @@
 # BuildKit ignore file for server/Dockerfile (context = repository root).
+# Build context is an explicit allowlist: local kubeconfig/mail credentials,
+# native installers and internal notes must never reach a container builder.
+**
+!rust-toolchain.toml
+!crates/
+!crates/**
+!server/
+!server/**
 **/target
-.git
-.github
-client
-docs
 **/.env
 **/.dev-mail
+**/node_modules
+**/AGENTS.md
+**/*.log

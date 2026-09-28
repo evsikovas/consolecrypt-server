@@ -226,7 +226,8 @@ impl Mailer for SmtpMailer {
     }
 }
 
-/// Message templates. Plain text; tokens are pasted into the client app.
+/// Plain-text messages work in both the app and web account. Codes in web
+/// links are fragments, so they do not enter HTTP access logs.
 pub mod templates {
     use super::{MailKind, MailMessage};
 
@@ -237,14 +238,26 @@ pub mod templates {
         }
     }
 
+    fn account_link(public_url: Option<&str>, action: &str, token: &str) -> String {
+        public_url
+            .map(|url| {
+                format!(
+                    "\n\nОткрыть личный кабинет:\n{}/account#action={action}&token={token}",
+                    url.trim_end_matches('/')
+                )
+            })
+            .unwrap_or_default()
+    }
+
     pub fn verify_email(to: &str, token: &str, public_url: Option<&str>) -> MailMessage {
         MailMessage {
             kind: MailKind::VerifyEmail,
             to: to.to_owned(),
-            subject: "Verify your ConsoleCrypt email address".to_owned(),
+            subject: "ConsoleCrypt — подтвердите email".to_owned(),
             body: format!(
-                "Paste this verification code into the ConsoleCrypt app:\n\n    {token}\n\n\
-                 If you did not create an account, ignore this message.{}",
+                "Подтвердите email в ConsoleCrypt. Вставьте этот код в приложение или личный кабинет:\n\n    {token}\n\n\
+                 Если вы не создавали аккаунт, просто проигнорируйте это письмо.{}{}",
+                account_link(public_url, "verify", token),
                 footer(public_url)
             ),
         }
@@ -263,13 +276,14 @@ pub mod templates {
                 MailKind::PasswordReset
             },
             to: to.to_owned(),
-            subject: "Reset your ConsoleCrypt account password".to_owned(),
+            subject: "ConsoleCrypt — восстановление доступа".to_owned(),
             body: format!(
-                "Paste this code into the ConsoleCrypt app to set a new account password:\n\n    {token}\n\n\
-                 It expires soon and can be used once. Resetting the account password signs out \
-                 all devices but does not unlock your vault: you still need your vault passphrase, \
-                 your Recovery Key or a trusted device.\n\n\
-                 If you did not request this, ignore this message.{}",
+                "Для изменения пароля аккаунта ConsoleCrypt вставьте этот одноразовый код:\n\n    {token}\n\n\
+                 Код действует ограниченное время. После смены пароля все сеансы будут завершены. \
+                 Это не разблокирует хранилище: для него нужна парольная фраза, \
+                 ключ восстановления или доверенное устройство.\n\n\
+                 Если вы не запрашивали восстановление, проигнорируйте это письмо.{}{}",
+                if recovery { String::new() } else { account_link(public_url, "reset", token) },
                 footer(public_url)
             ),
         }
@@ -328,7 +342,14 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("cct_TOKEN"));
+        // UTF-8 templates are MIME/base64 encoded by lettre. Check the
+        // decoded wire body, not whether an ASCII token survived encoding.
+        use base64::Engine as _;
+        let (_, body) = content.split_once("\r\n\r\n").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(body.split_whitespace().collect::<String>())
+            .unwrap();
+        assert!(String::from_utf8(decoded).unwrap().contains("cct_TOKEN"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;

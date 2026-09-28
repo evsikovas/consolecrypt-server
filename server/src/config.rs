@@ -14,7 +14,7 @@ use std::time::Duration;
 
 /// Default AGPL §13 source offer (ADR-0005). Operators of modified builds must
 /// set `CC_SOURCE_CODE_URL` to where their modified source can be obtained.
-pub const DEFAULT_SOURCE_CODE_URL: &str = "https://github.com/consolecrypt/consolecrypt";
+pub const DEFAULT_SOURCE_CODE_URL: &str = "https://git.evsikov.net/publics/consolecrypt";
 
 #[derive(Clone)]
 pub struct Config {
