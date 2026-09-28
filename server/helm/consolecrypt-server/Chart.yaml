@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
+apiVersion: v2
+name: consolecrypt-server
+description: >-
+  Self-hosted zero-knowledge sync server for ConsoleCrypt. Stores only
+  ciphertext, key envelopes, public keys and non-secret metadata; it cannot
+  decrypt vault data and SSH traffic never goes through it.
+type: application
+# Chart version (SemVer). Bump on every chart change.
+version: 0.1.0
+# Version of consolecrypt-server this chart deploys by default (image tag).
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/consolecrypt/consolecrypt
+sources:
+  - https://github.com/consolecrypt/consolecrypt
+keywords:
+  - consolecrypt
+  - ssh
+  - sync
+  - zero-knowledge
+  - self-hosted
+maintainers:
+  - name: Alexander Evsikov
+    email: i@evsikov.net
+    url: https://github.com/consolecrypt/consolecrypt
+annotations:
+  # The chart is part of server/** and shares its license (ADR-0005).
+  licenses: AGPL-3.0-only
+  artifacthub.io/license: AGPL-3.0-only

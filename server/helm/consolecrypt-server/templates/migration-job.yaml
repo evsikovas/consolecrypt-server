@@ -1,0 +1,93 @@
+{{- if .Values.migrations.job.enabled }}
+{{- /*
+Runs `consolecrypt-server migrate` before the new pods roll out. Hooks run
+before the release's regular resources are created/updated, so the Job must
+not depend on them:
+  * the database URL managed by the chart is copied into a hook-scoped Secret;
+  * the ServiceAccount is only used when it is not created by this chart;
+  * with the bundled PostgreSQL (created by the release itself) the Job runs on
+    pre-upgrade only; on first install the pods migrate at startup.
+*/}}
+{{- $hooks := ternary "pre-upgrade" "pre-install,pre-upgrade" (.Values.postgresql.enabled | default false) }}
+{{- $name := printf "%s-migrate" (include "consolecrypt-server.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- if include "consolecrypt-server.managesDatabaseUrl" . }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "consolecrypt-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    helm.sh/hook: {{ $hooks }}
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+data:
+  CC_DATABASE_URL: {{ .Values.database.url | toString | b64enc | quote }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "consolecrypt-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    helm.sh/hook: {{ $hooks }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.job.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.job.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "consolecrypt-server.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      {{- if not .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "consolecrypt-server.serviceAccountName" . }}
+      {{- end }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "consolecrypt-server.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          env:
+            - name: CC_LOG_FORMAT
+              value: {{ .Values.config.log.format | quote }}
+            {{- with .Values.config.log.filter }}
+            - name: CC_LOG
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CC_DATABASE_MAX_CONNECTIONS
+              value: "2"
+            {{- include "consolecrypt-server.databaseEnv" (dict "ctx" . "secretName" $name) | trim | nindent 12 }}
+          resources:
+            {{- toYaml (.Values.migrations.job.resources | default .Values.resources) | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

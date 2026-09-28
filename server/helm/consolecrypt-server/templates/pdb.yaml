@@ -1,0 +1,18 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "consolecrypt-server.fullname" . }}
+  labels:
+    {{- include "consolecrypt-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  {{- if not (eq (toString .Values.podDisruptionBudget.maxUnavailable) "") }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "consolecrypt-server.selectorLabels" . | nindent 6 }}
+{{- end }}

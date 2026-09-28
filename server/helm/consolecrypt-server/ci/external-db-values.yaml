@@ -1,0 +1,43 @@
+# CI / test values: external PostgreSQL + SMTP through the chart-managed
+# Secret, migration hook Job on pre-install/pre-upgrade, ingress-nginx.
+# The URL and password below are obvious placeholders, not credentials.
+database:
+  url: postgres://consolecrypt:ci-placeholder@postgres.example.org:5432/consolecrypt?sslmode=require
+  maxConnections: 10
+
+migrations:
+  runAtStartup: false
+  job:
+    enabled: true
+
+mail:
+  transport: smtp
+  from: "ConsoleCrypt <no-reply@example.org>"
+  smtp:
+    host: smtp.example.org
+    port: 587
+    tls: starttls
+    username: consolecrypt
+    password: ci-placeholder
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  hosts:
+    - host: sync.example.org
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: consolecrypt-server-tls
+      hosts:
+        - sync.example.org
+
+config:
+  publicUrl: https://sync.example.org
+  registrationOpen: false
+  requireEmailVerification: true

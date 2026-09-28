@@ -1,0 +1,64 @@
+# CI / test values: bundled PostgreSQL with every optional feature enabled.
+# Used by `helm lint` / `helm template` in .github/workflows/server.yml.
+# Contains no secrets (the bundled database password is generated).
+replicaCount: 2
+
+postgresql:
+  enabled: true
+  persistence:
+    size: 1Gi
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: sync.example.org
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: consolecrypt-server-tls
+      hosts:
+        - sync.example.org
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+
+migrations:
+  job:
+    enabled: true
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+
+config:
+  publicUrl: https://sync.example.org
+  log:
+    filter: info,sqlx=warn
+
+lifecycle:
+  preStop:
+    sleep:
+      seconds: 5
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: consolecrypt-server
+        app.kubernetes.io/component: server

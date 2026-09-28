@@ -1,0 +1,61 @@
+{{- $fullName := include "consolecrypt-server.fullname" . -}}
+ConsoleCrypt sync server {{ .Chart.AppVersion }} — release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+{{- if not (include "consolecrypt-server.hasDatabase" .) }}
+
+!! NO DATABASE CONFIGURED — the server pods cannot start.
+!! Set database.existingSecret (or database.url) for an external PostgreSQL,
+!! or postgresql.enabled=true for the bundled single-pod PostgreSQL, then run
+!! `helm upgrade`.
+{{- end }}
+
+1. API endpoint
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+   {{ if $.Values.ingress.tls }}https{{ else }}http{{ end }}://{{ $host.host }}/v1/meta
+{{- end }}
+{{- if not .Values.ingress.tls }}
+   WARNING: ingress.tls is empty. Clients must reach the server over HTTPS; make
+   sure TLS is terminated in front of it.
+{{- end }}
+{{- else }}
+   No Ingress enabled. Test locally with:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullName }} 8080:{{ .Values.service.port }}
+     curl http://127.0.0.1:8080/v1/meta
+{{- end }}
+
+2. Operator commands (act on ACCOUNTS only — they never grant vault access)
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ $fullName }} -- consolecrypt-server admin list-users
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ $fullName }} -- consolecrypt-server admin reset-token --email user@example.org
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ $fullName }} -- consolecrypt-server admin verify-email --email user@example.org
+{{- if eq .Values.mail.transport "disabled" }}
+   Mail is disabled: users who forget their account password get a reset token
+   from you via `admin reset-token`.
+{{- end }}
+{{- if .Values.metrics.enabled }}
+
+3. Metrics (cluster-internal only): svc/{{ $fullName }}-metrics:{{ .Values.metrics.port }}/metrics
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+
+Bundled PostgreSQL is enabled (small installs only: one pod, no backups).
+Back it up regularly, e.g.:
+  kubectl -n {{ .Release.Namespace }} exec statefulset/{{ include "consolecrypt-server.postgresql.fullname" . }} -- \
+    pg_dump -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }} -Fc > consolecrypt-$(date +%F).dump
+Its data volume (PVC) and password Secret are kept on `helm uninstall`.
+{{- end }}
+{{- if and .Values.ingress.enabled (eq (include "consolecrypt-server.trustProxyHeaders" .) "false") }}
+
+WARNING: config.trustProxyHeaders=false behind an Ingress: per-IP rate limits
+will see only the ingress controller's address.
+{{- end }}
+{{- if and .Values.podDisruptionBudget.enabled (not .Values.autoscaling.enabled) (lt (int .Values.replicaCount) 2) }}
+
+WARNING: a PodDisruptionBudget with a single replica blocks node drains.
+{{- end }}
+{{- if and (eq .Values.mail.transport "smtp") (not .Values.config.publicUrl) }}
+
+NOTE: config.publicUrl is empty; emails cannot contain links to this instance.
+{{- end }}
+
+AGPL-3.0 §13: GET /v1/meta advertises {{ .Values.config.sourceCodeUrl | default "the upstream source URL" }}.
+If you run a modified server, set config.sourceCodeUrl to your modified source.

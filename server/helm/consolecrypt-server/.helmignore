@@ -1,0 +1,19 @@
+# Patterns to ignore when building packages (`helm package`).
+# Supports shell glob matching, relative path matching and negation (!).
+.DS_Store
+# VCS
+.git/
+.gitignore
+# Editors
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+.idea/
+.vscode/
+# Local overrides — may contain secrets, never package them
+*.local.yaml
+values-*.local.yaml
+# Test-only values (used by `helm lint -f ci/…` in CI)
+ci/

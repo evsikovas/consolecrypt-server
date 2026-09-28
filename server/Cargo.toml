@@ -1,0 +1,87 @@
+# ConsoleCrypt Cloud/Sync server. Its own Cargo workspace (own Cargo.lock and
+# target/), independent of client/rust and crates/ (ADR-0001). Depends only on
+# the shared wire contract `cc-protocol`, never on `cc-models`.
+[workspace]
+resolver = "2"
+
+[package]
+name = "consolecrypt-server"
+description = "Self-hosted zero-knowledge sync server for ConsoleCrypt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
+repository = "https://github.com/consolecrypt/consolecrypt"
+authors = ["Alexander Evsikov <i@evsikov.net>"]
+publish = false
+default-run = "consolecrypt-server"
+
+[lib]
+name = "consolecrypt_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "consolecrypt-server"
+path = "src/main.rs"
+
+[features]
+default = ["otel"]
+# OpenTelemetry OTLP trace export (activated at runtime only when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set).
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
+
+[dependencies]
+cc-protocol = { path = "../crates/protocol" }
+
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7", features = ["trace", "sensitive-headers", "limit", "set-header", "catch-panic", "timeout"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
+base64 = "0.22"
+thiserror = "2"
+anyhow = "1"
+futures-util = "0.3"
+
+# Crypto: hashing, constant-time compare, password hashing, signature
+# VERIFICATION. There is deliberately no AEAD / decryption dependency.
+argon2 = "0.6"
+sha2 = "0.11"
+subtle = "2"
+ed25519-dalek = "3"
+getrandom = "0.4"
+
+governor = "0.10"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "webpki-roots", "hostname"] }
+clap = { version = "4", features = ["derive", "env"] }
+# Release builds compile TRACE out entirely (tracing and the `log` facade used
+# by some dependencies, e.g. tungstenite logs request headers at TRACE):
+# operators can go up to DEBUG, never to a level that could echo headers.
+tracing = { version = "0.1", features = ["release_max_level_debug"] }
+log = { version = "0.4", features = ["release_max_level_debug"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+metrics = "0.24"
+opentelemetry = { version = "0.33", optional = true }
+opentelemetry_sdk = { version = "0.33", optional = true }
+opentelemetry-otlp = { version = "0.33", optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+
+[dev-dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+tokio-tungstenite = "0.30"
+ed25519-dalek = { version = "3", features = ["rand_core"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev.package.argon2]
+opt-level = 3

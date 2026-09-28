@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
+# Local / small self-hosted deployment: server on :8080 + PostgreSQL 16.
+#
+#   cd server && cp .env.example .env   # adjust CC_POSTGRES_PASSWORD etc.
+#   docker compose up --build
+#
+# Dev mail (CC_MAIL_TRANSPORT=file) is written to ./.dev-mail (git-ignored).
+
+name: consolecrypt
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: consolecrypt
+      POSTGRES_USER: consolecrypt
+      POSTGRES_PASSWORD: ${CC_POSTGRES_PASSWORD:?set CC_POSTGRES_PASSWORD in server/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U consolecrypt -d consolecrypt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: consolecrypt-server:dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CC_DATABASE_URL: postgres://consolecrypt:${CC_POSTGRES_PASSWORD}@postgres:5432/consolecrypt
+      CC_LISTEN_ADDR: 0.0.0.0:8080
+      CC_METRICS_LISTEN: 0.0.0.0:9090
+      CC_MAIL_DIR: /var/lib/consolecrypt/mail
+    ports:
+      - "${CC_HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${CC_METRICS_PORT:-9090}:9090"
+    volumes:
+      - ./.dev-mail:/var/lib/consolecrypt/mail
+
+volumes:
+  pgdata:

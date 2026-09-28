@@ -1,0 +1,8 @@
+# BuildKit ignore file for server/Dockerfile (context = repository root).
+**/target
+.git
+.github
+client
+docs
+**/.env
+**/.dev-mail

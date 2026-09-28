@@ -1,0 +1,431 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
+# Default values for the consolecrypt-server chart.
+#
+# ConsoleCrypt sync server: stateless HTTP + WebSocket API, all state in
+# PostgreSQL. Zero-knowledge — it stores only ciphertext, key envelopes, public
+# keys and non-secret metadata. License: AGPL-3.0-only.
+#
+# A working install needs a database. Configure exactly ONE of:
+#   * database.url or database.existingSecret — external PostgreSQL (CI: 16)
+#     (managed service or an operator such as CloudNativePG; recommended), or
+#   * postgresql.enabled=true — a bundled single-pod PostgreSQL for small
+#     single-node installs (k3s at home, evaluation).
+#
+# Every server setting maps to a CC_* environment variable of the binary; see
+# server/.env.example in the source repository for the full reference.
+
+# -- Number of server pods (ignored when autoscaling.enabled=true).
+# More than one replica requires config.eventBus=postgres (the default):
+# realtime events are fanned out between pods through PostgreSQL LISTEN/NOTIFY.
+replicaCount: 1
+
+image:
+  # -- Server image. No official image is published yet: build it from the
+  # repository root and push it to your registry:
+  #   docker build -f server/Dockerfile -t registry.example.org/consolecrypt-server:0.1.0 .
+  repository: ghcr.io/consolecrypt/consolecrypt-server
+  # -- Image tag; defaults to the chart appVersion.
+  tag: ""
+  # -- Optional image digest (e.g. "sha256:…"); takes precedence over the tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# -- Pull secrets for private registries, e.g. [{name: regcred}].
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a dedicated ServiceAccount. The server never calls the
+  # Kubernetes API; its token is not mounted.
+  create: true
+  # -- Name to use (generated from the fullname when empty and create=true;
+  # "default" when empty and create=false).
+  name: ""
+  annotations: {}
+
+# -- Extra annotations / labels for the server pods.
+podAnnotations: {}
+podLabels: {}
+
+# -- Pod security context. The image is distroless and runs as uid/gid 65532.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context (restricted Pod Security Standard).
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: ["ALL"]
+
+service:
+  type: ClusterIP
+  # -- Port of the API Service (HTTP + WebSocket). The container listens on 8080.
+  port: 8080
+  annotations: {}
+
+ingress:
+  # -- Expose the API through an Ingress. Terminate TLS here (TLS 1.2+/1.3);
+  # clients must reach the server over HTTPS/WSS.
+  enabled: false
+  # -- IngressClass, e.g. "traefik" (k3s default) or "nginx".
+  className: ""
+  # -- Ingress annotations. The API uses a long-lived WebSocket
+  # (GET /v1/events/ws) and accepts request bodies up to 16 MiB (sync push).
+  #
+  # Traefik (k3s default) + cert-manager — WebSockets work out of the box, no
+  # body-size limit by default:
+  #   cert-manager.io/cluster-issuer: letsencrypt
+  #   traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  #   traefik.ingress.kubernetes.io/router.tls: "true"
+  # (If WebSockets are cut after a fixed time, raise the entrypoint's
+  #  transport.respondingTimeouts.readTimeout in Traefik's static config; on
+  #  k3s via a HelmChartConfig. Clients reconnect and resync either way.)
+  #
+  # ingress-nginx — raise the 1 MiB default body limit and the 60 s proxy
+  # timeouts (WebSocket upgrade itself needs no annotation):
+  #   cert-manager.io/cluster-issuer: letsencrypt
+  #   nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  annotations: {}
+  hosts:
+    - host: sync.example.org
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS config, e.g.
+  #   - secretName: consolecrypt-server-tls
+  #     hosts: [sync.example.org]
+  tls: []
+
+# -- Resource requests/limits of the server container. Memory use is dominated
+# by Argon2id account-password hashing: config.argon2.memoryKib ×
+# config.argon2.maxConcurrent must stay well below the memory limit.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# -- Startup probe. The HTTP listener opens after the database connection is
+# established and (with migrations.runAtStartup) migrations are applied.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 60
+# -- Liveness probe: process is alive (does not depend on the database).
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+# -- Readiness probe: the database is reachable.
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Deployment update strategy. Default: surge one new pod before removing
+# an old one (no downtime even with a single replica).
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# -- Grace period for in-flight requests on shutdown (SIGTERM). WebSocket
+# clients reconnect to another pod automatically.
+terminationGracePeriodSeconds: 30
+# -- Container lifecycle hooks. The image has no shell; on Kubernetes >= 1.30 a
+# native sleep gives ingress controllers time to drop the endpoint first:
+#   preStop:
+#     sleep:
+#       seconds: 5
+lifecycle: {}
+
+autoscaling:
+  # -- HorizontalPodAutoscaler (autoscaling/v2). Requires metrics-server
+  # (bundled with k3s) and config.eventBus=postgres.
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  # -- Optional memory target (percent of the request); empty = not used.
+  targetMemoryUtilizationPercentage: ""
+  # -- Optional HPA scaling behavior (autoscaling/v2 `behavior`).
+  behavior: {}
+
+podDisruptionBudget:
+  # -- Create a PodDisruptionBudget. Only useful with 2+ replicas: with a
+  # single replica and minAvailable=1 it blocks voluntary evictions (node drain).
+  enabled: false
+  minAvailable: 1
+  # -- When set, used instead of minAvailable (e.g. 1 or "25%").
+  maxUnavailable: ""
+
+metrics:
+  # -- Prometheus metrics on a separate listener (container port 9090, path
+  # /metrics), exposed only through a dedicated ClusterIP Service
+  # "<fullname>-metrics" — never through the Ingress. false sets
+  # CC_METRICS_LISTEN=off.
+  enabled: true
+  # -- Port of the metrics Service.
+  port: 9090
+  serviceMonitor:
+    # -- Create a Prometheus Operator ServiceMonitor (needs the
+    # monitoring.coreos.com/v1 CRDs, e.g. kube-prometheus-stack).
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # -- Extra labels so your Prometheus selects it, e.g. {release: kube-prometheus-stack}.
+    labels: {}
+
+# External PostgreSQL (ignored when postgresql.enabled=true).
+database:
+  # -- Full connection URL, e.g.
+  # postgres://consolecrypt:PASSWORD@db.example.org:5432/consolecrypt?sslmode=verify-full
+  # Stored in the chart-managed Secret. Prefer existingSecret for production
+  # (keeps the password out of Helm values / release history).
+  url: ""
+  # -- Name of an existing Secret holding the connection URL. Works directly
+  # with CloudNativePG "<cluster>-app" secrets (existingSecretKey: uri).
+  existingSecret: ""
+  # -- Key inside existingSecret that holds the URL.
+  existingSecretKey: database-url
+  # -- Connection pool size per pod (CC_DATABASE_MAX_CONNECTIONS). Keep
+  # replicas × maxConnections below the server's max_connections; each pod also
+  # holds one extra connection for LISTEN/NOTIFY.
+  maxConnections: 20
+  # -- How long a starting pod keeps retrying an unreachable database
+  # (CC_DATABASE_CONNECT_TIMEOUT_SECS) before exiting.
+  connectTimeoutSecs: 60
+
+migrations:
+  # -- Apply pending migrations when each pod starts (CC_RUN_MIGRATIONS).
+  # Safe with several replicas: migrations take a PostgreSQL advisory lock.
+  runAtStartup: true
+  job:
+    # -- Run `consolecrypt-server migrate` as a Helm hook Job before the new
+    # pods roll out (pre-install + pre-upgrade; pre-upgrade only with the
+    # bundled PostgreSQL, which does not exist before the first install). A
+    # failed migration then fails `helm upgrade` instead of crash-looping pods.
+    # Can be combined with runAtStartup (then a no-op at startup).
+    enabled: false
+    backoffLimit: 1
+    activeDeadlineSeconds: 600
+    # -- Resources of the migration Job; defaults to `resources` when empty.
+    resources: {}
+
+# Server settings (non-secret; rendered into a ConfigMap as CC_* variables).
+# Empty values ("") are omitted, so the server's built-in default applies.
+config:
+  # -- Public base URL of this instance, used in emails (CC_PUBLIC_URL).
+  publicUrl: ""
+  # -- AGPL-3.0 §13 source offer returned by GET /v1/meta (CC_SOURCE_CODE_URL).
+  # If you run a MODIFIED server, point this at the source of your version.
+  sourceCodeUrl: https://github.com/consolecrypt/consolecrypt
+  # -- Allow new account registration (CC_REGISTRATION_OPEN).
+  registrationOpen: true
+  # -- Require a verified email before creating vaults
+  # (CC_REQUIRE_EMAIL_VERIFICATION); needs working mail or the admin CLI.
+  requireEmailVerification: false
+  # -- Trust X-Forwarded-For from exactly one reverse proxy in front
+  # (CC_TRUST_PROXY_HEADERS): "auto" (= ingress.enabled), "true" or "false".
+  # Must be true behind an ingress, otherwise per-IP rate limits see only the
+  # ingress controller's address.
+  trustProxyHeaders: auto
+  # -- Realtime event bus (CC_EVENT_BUS): "postgres" (works with any number of
+  # replicas) or "local" (single replica only).
+  eventBus: postgres
+  # -- Send Strict-Transport-Security (CC_HSTS).
+  hsts: true
+  # -- Require protocol 1.5 per-request device proofs
+  # (CC_REQUIRE_REQUEST_PROOF, default true): a stolen token is useless
+  # without the device key. false is a warned opt-out only for migrating
+  # clients that do not sign yet (missing proofs are counted in
+  # cc_request_proofs_total). The ingress must not rewrite request paths or
+  # queries (they are signed).
+  requireRequestProof: true
+  log:
+    # -- json | pretty (CC_LOG_FORMAT).
+    format: json
+    # -- Log filter (CC_LOG), e.g. "info" or "debug,sqlx=warn". Empty = "info,sqlx=warn".
+    filter: ""
+  # Token lifetimes in seconds.
+  tokens:
+    accessTtlSecs: 900
+    refreshTtlSecs: 2592000
+    deviceRequestTtlSecs: 86400
+    passwordResetTtlSecs: 3600
+    emailVerifyTtlSecs: 172800
+  # Argon2id parameters for ACCOUNT passwords (vault keys never reach the server).
+  argon2:
+    memoryKib: 19456
+    iterations: 2
+    parallelism: 1
+    # -- Maximum concurrent hashes per pod (CC_ARGON2_MAX_CONCURRENT). Bounds
+    # memory: 4 × 19 MiB. Empty = number of CPUs visible to the container,
+    # which without a CPU limit is the node's core count.
+    maxConcurrent: 4
+  # Rate limits (per pod).
+  rateLimit:
+    enabled: true
+    authPerIpPerMinute: 30
+    loginPerEmailPerMinute: 10
+    recoveryPerEmailPerHour: 5
+    proofPerDevicePerMinute: 20
+  sync:
+    # -- Byte budget of one changes/snapshot page (CC_SYNC_PAGE_BYTES).
+    pageBytes: 8388608
+  quotas:
+    # -- Live ciphertext per vault (CC_MAX_VAULT_BYTES); pushes beyond → 413.
+    maxVaultBytes: 1073741824
+    # -- Vaults an account may own (CC_MAX_VAULTS_PER_ACCOUNT); beyond → 403.
+    maxVaultsPerAccount: 50
+  websocket:
+    pingIntervalSecs: 30
+    sessionRecheckSecs: 30
+    # -- Concurrent WebSocket connections per account per pod
+    # (CC_WS_MAX_CONNECTIONS_PER_USER); more are refused with 429.
+    maxConnectionsPerUser: 32
+  maintenance:
+    # -- Period of the maintenance/retention pass (CC_MAINTENANCE_INTERVAL_SECS);
+    # runs on one pod at a time (advisory lock). 0 disables it.
+    intervalSecs: 3600
+    # Retention in days; 0 keeps data forever.
+    retention:
+      # -- Revoked/expired sessions.
+      sessionDays: 7
+      # -- Idempotency records of accepted sync mutations.
+      syncMutationDays: 30
+      # -- Audit trail.
+      auditDays: 365
+      # -- Grace period before a deleted vault's ciphertext is purged.
+      deletedVaultDays: 30
+      # -- Decided/expired device trust requests.
+      deviceRequestDays: 90
+
+mail:
+  # -- disabled | smtp | file.
+  #  * disabled (default): nothing is sent. Operators issue password-reset
+  #    tokens with `consolecrypt-server admin reset-token --email …` (see NOTES).
+  #  * smtp: send through mail.smtp.
+  #  * file: debugging only — messages are written to an emptyDir inside the pod.
+  transport: disabled
+  # -- Sender address (CC_MAIL_FROM).
+  from: "ConsoleCrypt <no-reply@example.org>"
+  smtp:
+    host: ""
+    port: 587
+    # -- tls (implicit TLS, 465) | starttls (587) | none (local relay only).
+    tls: starttls
+    username: ""
+    # -- SMTP password, stored in the chart-managed Secret. Prefer existingSecret.
+    password: ""
+    # -- Existing Secret holding the SMTP password.
+    existingSecret: ""
+    existingSecretPasswordKey: smtp-password
+  file:
+    # -- Mount point of the emptyDir used by the "file" transport.
+    dir: /var/lib/consolecrypt/mail
+
+# -- Extra environment variables for the server container, e.g. OpenTelemetry
+# trace export (OTLP over HTTP/protobuf):
+#   - name: OTEL_EXPORTER_OTLP_ENDPOINT
+#     value: http://otel-collector:4318
+extraEnv: []
+# -- Extra envFrom sources (ConfigMaps / Secrets with CC_* keys).
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# -- e.g. spread replicas across nodes:
+#   - maxSkew: 1
+#     topologyKey: kubernetes.io/hostname
+#     whenUnsatisfiable: ScheduleAnyway
+#     labelSelector:
+#       matchLabels:
+#         app.kubernetes.io/name: consolecrypt-server
+#         app.kubernetes.io/component: server
+topologySpreadConstraints: []
+
+# Bundled PostgreSQL — FOR SMALL INSTALLS ONLY (single node, e.g. k3s at home
+# or evaluation): one pod, no replication, no automated backups, no tuning.
+# For production use a managed PostgreSQL or an operator (e.g. CloudNativePG)
+# and set database.existingSecret instead. Back up the volume yourself
+# (e.g. `kubectl exec … -- pg_dump`).
+postgresql:
+  enabled: false
+  image:
+    repository: docker.io/library/postgres
+    # -- Keep the major version fixed: upgrading the major version of an
+    # existing data directory needs a manual pg_upgrade/dump-restore.
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  auth:
+    database: consolecrypt
+    username: consolecrypt
+    # -- Password; generated (32 random characters) when empty. It is applied
+    # only when the data directory is first initialised. The chart-managed
+    # Secret is kept on `helm uninstall` (like the data volume) so a
+    # reinstall can still open the existing data.
+    password: ""
+    # -- Existing Secret with the password (takes precedence over password).
+    existingSecret: ""
+    existingSecretPasswordKey: password
+  persistence:
+    # -- false = emptyDir: ALL DATA IS LOST when the pod is rescheduled.
+    enabled: true
+    # -- StorageClass; empty = cluster default (k3s: local-path).
+    storageClass: ""
+    size: 8Gi
+    accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  # -- Server pods wait (init container with pg_isready) until the bundled
+  # database accepts connections, instead of crash-looping on first install.
+  waitForReady: true
+  podAnnotations: {}
+  # -- postgres:*-alpine runs as uid/gid 70 ("postgres").
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    fsGroup: 70
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop: ["ALL"]
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
