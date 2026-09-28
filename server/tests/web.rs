@@ -9,6 +9,8 @@ async fn web_routes_have_local_asset_csp_and_do_not_mask_api_errors() {
         ("/account", "text/html"),
         ("/privacy", "text/html"),
         ("/assets/api.js", "text/javascript"),
+        ("/assets/i18n.js", "text/javascript"),
+        ("/assets/en.js", "text/javascript"),
         ("/assets/site.css", "text/css"),
         ("/assets/desktop.png", "image/png"),
         ("/assets/phone.png", "image/png"),

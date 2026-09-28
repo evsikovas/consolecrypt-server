@@ -55,6 +55,14 @@ pub fn router() -> Router<AppState> {
             asset!("assets/site.js", "text/javascript; charset=utf-8"),
         )
         .route(
+            "/assets/i18n.js",
+            asset!("assets/i18n.js", "text/javascript; charset=utf-8"),
+        )
+        .route(
+            "/assets/en.js",
+            asset!("assets/en.js", "text/javascript; charset=utf-8"),
+        )
+        .route(
             "/assets/api.js",
             asset!("assets/api.js", "text/javascript; charset=utf-8"),
         )
