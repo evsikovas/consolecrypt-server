@@ -20,13 +20,19 @@ COPY rust-toolchain.toml ./
 COPY crates ./crates
 COPY server ./server
 WORKDIR /src/server
+ARG TARGETARCH
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/server/target \
+    --mount=type=cache,target=/src/server/target,id=consolecrypt-server-${TARGETARCH},sharing=locked \
     cargo build --release --locked --bin consolecrypt-server \
     && cp target/release/consolecrypt-server /consolecrypt-server
 
 FROM ${RUNTIME_IMAGE}
-LABEL org.opencontainers.image.title="consolecrypt-server" \
+ARG SOURCE_REVISION=unknown
+ARG SERVER_VERSION=unknown
+ARG SOURCE_URL=https://git.evsikov.net/publics/consolecrypt
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.version="${SERVER_VERSION}" \
+      org.opencontainers.image.title="consolecrypt-server" \
       org.opencontainers.image.description="Self-hosted zero-knowledge sync server for ConsoleCrypt" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.authors="Alexander Evsikov <i@evsikov.net>" \
@@ -34,7 +40,8 @@ LABEL org.opencontainers.image.title="consolecrypt-server" \
       org.opencontainers.image.source="https://git.evsikov.net/publics/consolecrypt"
 COPY --from=build /consolecrypt-server /usr/local/bin/consolecrypt-server
 USER 65532:65532
-ENV CC_LISTEN_ADDR=0.0.0.0:8080 \
+ENV CC_SOURCE_CODE_URL=${SOURCE_URL} \
+    CC_LISTEN_ADDR=0.0.0.0:8080 \
     CC_METRICS_LISTEN=0.0.0.0:9090 \
     CC_LOG_FORMAT=json
 EXPOSE 8080 9090

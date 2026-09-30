@@ -33,7 +33,6 @@ pub mod sync;
 pub mod telemetry;
 pub mod util;
 pub mod vaults;
-pub mod web;
 
 pub use config::Config;
 pub use state::AppState;
@@ -144,7 +143,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(paths::ops::HEALTHZ, get(meta::healthz))
         .route(paths::ops::READYZ, get(meta::readyz))
         .merge(api)
-        .merge(web::router())
         .fallback(middleware::not_found)
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,

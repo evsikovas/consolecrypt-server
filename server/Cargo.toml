@@ -7,11 +7,11 @@ resolver = "2"
 [package]
 name = "consolecrypt-server"
 description = "Self-hosted zero-knowledge sync server for ConsoleCrypt"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
-repository = "https://github.com/consolecrypt/consolecrypt"
+repository = "https://git.evsikov.net/publics/consolecrypt"
 authors = ["Alexander Evsikov <i@evsikov.net>"]
 publish = false
 default-run = "consolecrypt-server"

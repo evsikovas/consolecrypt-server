@@ -1,0 +1,30 @@
+# Include from the root .gitlab-ci.yml. The website has its own project/image.
+publish-server-image:
+  stage: build
+  tags: [macos, arm64]
+  resource_group: consolecrypt-server-registry
+  timeout: 2h
+  variables:
+    CC_IMAGE_REPOSITORY: "$CI_REGISTRY_IMAGE/server"
+  rules:
+    - if: '$CI_PROJECT_PATH != "publics/consolecrypt"'
+      when: never
+    - if: '$CI_COMMIT_TAG =~ /^server-v[0-9]+\.[0-9]+\.[0-9]+$/'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - server/**/*
+        - crates/protocol/**/*
+        - rust-toolchain.toml
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH'
+      when: manual
+      allow_failure: true
+  script:
+    - export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin:$PATH"
+    - python3 -m unittest discover -s server/scripts -p 'test_publish_image.py' -v
+    - python3 server/scripts/publish_image.py
+  artifacts:
+    name: "ConsoleCrypt-server-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - dist/server-image.json
+    expire_in: 1 year

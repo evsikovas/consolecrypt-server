@@ -21,10 +21,9 @@
 replicaCount: 1
 
 image:
-  # -- Server image. No official image is published yet: build it from the
-  # repository root and push it to your registry:
-  #   docker build -f server/Dockerfile -t registry.example.org/consolecrypt-server:0.1.0 .
-  repository: ghcr.io/consolecrypt/consolecrypt-server
+  # -- API-only image; the product website is distributed separately.
+  # Releases publish linux/amd64 and linux/arm64. Prefer image.digest for deployments.
+  repository: registry.evsikov.net/publics/consolecrypt/server
   # -- Image tag; defaults to the chart appVersion.
   tag: ""
   # -- Optional image digest (e.g. "sha256:…"); takes precedence over the tag.
