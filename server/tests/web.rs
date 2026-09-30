@@ -2,50 +2,52 @@
 mod common;
 
 #[tokio::test]
-async fn web_routes_have_local_asset_csp_and_do_not_mask_api_errors() {
+async fn server_is_api_only_and_does_not_serve_website_assets() {
     let srv = server!();
-    for (path, content_type) in [
-        ("/", "text/html"),
-        ("/account", "text/html"),
-        ("/privacy", "text/html"),
-        ("/assets/api.js", "text/javascript"),
-        ("/assets/i18n.js", "text/javascript"),
-        ("/assets/en.js", "text/javascript"),
-        ("/assets/site.css", "text/css"),
-        ("/assets/desktop.png", "image/png"),
-        ("/assets/phone.png", "image/png"),
+    for path in [
+        "/",
+        "/account",
+        "/privacy",
+        "/assets/api.js",
+        "/assets/site.css",
+        "/v1/does-not-exist",
     ] {
         let response = srv.http.get(srv.url(path)).send().await.unwrap();
-        assert_eq!(response.status(), 200, "{path}");
-        assert!(response.headers()["content-type"]
-            .to_str()
-            .unwrap()
-            .starts_with(content_type));
+        assert_eq!(response.status(), 404, "{path}");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/json",
+            "{path}"
+        );
         assert!(response.headers()["content-security-policy"]
             .to_str()
             .unwrap()
-            .contains("script-src 'self'"));
-        assert_eq!(response.headers()["x-frame-options"], "DENY");
-        assert!(!response.bytes().await.unwrap().is_empty());
+            .contains("default-src 'none'"));
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "not_found", "{path}");
     }
-    let response = srv
-        .http
-        .get(srv.url("/v1/does-not-exist"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 404);
-    assert_eq!(response.headers()["content-type"], "application/json");
-    let response = srv
-        .http
-        .get(srv.url("/v1/auth/me"))
-        .header("x-cc-protocol-version", "1.5")
-        .send()
-        .await
-        .unwrap();
+    assert_eq!(
+        srv.http
+            .get(srv.url("/healthz"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        srv.http
+            .get(srv.url("/readyz"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let response = srv.http.get(srv.url("/v1/meta")).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let meta: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(meta["server_version"], env!("CARGO_PKG_VERSION"));
+    let response = srv.http.get(srv.url("/v1/auth/me")).send().await.unwrap();
     assert_eq!(response.status(), 401);
-    assert!(response.headers()["content-security-policy"]
-        .to_str()
-        .unwrap()
-        .contains("default-src 'none'"));
 }
