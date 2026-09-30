@@ -122,6 +122,20 @@ the server default applies. Integers are rendered without exponent notation.
 */}}
 {{- define "consolecrypt-server.configData" -}}
 {{- $c := .Values.config }}
+{{- $sharing := dict }}
+{{- range $name := list "objectSharingEnabled" "sharedGroupsEnabled" "sharedSecretsEnabled" "sharingOwnerOnlineEnrollmentEnabled" }}
+{{- $value := false }}
+{{- if hasKey $c $name }}{{- $value = get $c $name }}{{- end }}
+{{- if not (kindIs "bool" $value) }}{{- fail (printf "config.%s must be a boolean" $name) }}{{- end }}
+{{- $_ := set $sharing $name $value }}
+{{- end }}
+{{- $extensions := or $sharing.sharedGroupsEnabled $sharing.sharedSecretsEnabled $sharing.sharingOwnerOnlineEnrollmentEnabled }}
+{{- if and $extensions (not $sharing.objectSharingEnabled) }}
+{{- fail "sharing extensions require config.objectSharingEnabled=true" }}
+{{- end }}
+{{- if and (or $sharing.objectSharingEnabled $extensions) (not (and (kindIs "bool" $c.requireRequestProof) $c.requireRequestProof)) }}
+{{- fail "object sharing requires config.requireRequestProof=true" }}
+{{- end }}
 {{- $env := dict
   "CC_LISTEN_ADDR" "0.0.0.0:8080"
   "CC_METRICS_LISTEN" (ternary "0.0.0.0:9090" "off" (.Values.metrics.enabled | default false))
@@ -135,6 +149,10 @@ the server default applies. Integers are rendered without exponent notation.
   "CC_EVENT_BUS" $c.eventBus
   "CC_HSTS" $c.hsts
   "CC_REQUIRE_REQUEST_PROOF" $c.requireRequestProof
+  "CC_OBJECT_SHARING_ENABLED" $sharing.objectSharingEnabled
+  "CC_SHARED_GROUPS_ENABLED" $sharing.sharedGroupsEnabled
+  "CC_SHARED_SECRETS_ENABLED" $sharing.sharedSecretsEnabled
+  "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED" $sharing.sharingOwnerOnlineEnrollmentEnabled
   "CC_LOG_FORMAT" $c.log.format
   "CC_LOG" $c.log.filter
   "CC_ACCESS_TOKEN_TTL_SECS" $c.tokens.accessTtlSecs

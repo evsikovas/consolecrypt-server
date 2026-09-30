@@ -44,6 +44,10 @@ pub async fn authenticate(State(state): State<AppState>, req: Request, next: Nex
             };
             let limit = if parts.uri.path() == paths::SYNC_PUSH {
                 limits::MAX_PUSH_BODY_BYTES
+            } else if parts.uri.path() == "/v1/shares"
+                || parts.uri.path().starts_with("/v1/shares/")
+            {
+                crate::sharing::handlers::BODY_LIMIT
             } else {
                 crate::DEFAULT_BODY_LIMIT
             };

@@ -49,8 +49,58 @@ async fn restore_from_backup_keeps_vaults_usable() {
         return;
     };
     let user = std::env::var("CC_TEST_PG_USER").unwrap_or_else(|_| "postgres".into());
-    let original = server!();
+    let original = server!(|c| {
+        c.object_sharing_enabled = true;
+        c.sharing_owner_online_enrollment_enabled = true;
+    });
     let a = original.new_account().await;
+    use cc_protocol::{sharing::SharingRole, sharing_enrollment::*};
+    use common::enrollment as en;
+    let anchor = original.new_account().await;
+    let target = original
+        .new_device_session(&anchor, "restored target")
+        .await;
+    let initial = common::sharing::create(&original, &a, &[(&anchor, SharingRole::Reader)]).await;
+    let grant = en::grant(
+        &a,
+        &anchor,
+        &initial,
+        SharingRole::Reader,
+        EnrollmentMode::Manual,
+        2,
+    );
+    en::publish_grant(&original, &a, &grant).await;
+    let submission = en::submission(&target, &anchor, &grant, SharingRole::Reader);
+    let _: OwnDeviceRequestState = en::post(
+        &original,
+        &target,
+        &en::requests_path(grant.grant.scope.share_id),
+        &submission,
+    )
+    .await;
+    let (challenge, response) = en::respond(&original, &a, &target, &submission).await;
+    let acceptance = en::acceptance(
+        &a,
+        &target,
+        &initial,
+        &grant,
+        &submission,
+        &challenge,
+        &response,
+    );
+    let request_path = en::request_path(
+        grant.grant.scope.share_id,
+        submission.request.request.request_id,
+    );
+    let accepted: OwnDeviceAcceptanceResult = en::post(
+        &original,
+        &a,
+        &format!("{request_path}/accept"),
+        &acceptance,
+    )
+    .await;
+    let receipt_before: OwnDeviceRequestState = en::get(&original, &a, &request_path).await;
+    let shared_before = accepted.state;
     let vault = original.create_vault(&a).await;
     let mutations: Vec<_> = (0..3).map(|_| put(ObjectId::new(), 0)).collect();
     let bodies: Vec<_> = mutations
@@ -86,12 +136,96 @@ async fn restore_from_backup_keeps_vaults_usable() {
         ],
         Some(&dump),
     );
-    let restored = TestServer::spawn_on(restored_db, url, |_| {}).await;
+    let restored = TestServer::spawn_on(restored_db, url, |c| {
+        c.object_sharing_enabled = true;
+        c.sharing_owner_online_enrollment_enabled = true;
+    })
+    .await;
 
     // Same account, same device, same session material, same ciphertext.
     let (s, body) = restored.login(&a.email, &a.password, &a.device).await;
     assert_eq!(s, StatusCode::OK, "{body}");
     let session = restored.session(a.email.clone(), a.password.clone(), a.device, body);
+    let shared_after = consolecrypt_server::sharing::service::get(
+        &restored.state,
+        &common::sharing::context(&session),
+        shared_before.access.manifest.share_id,
+    )
+    .await
+    .unwrap();
+    assert!(
+        shared_after == shared_before,
+        "restored sharing state changed"
+    );
+    let receipt_after: OwnDeviceRequestState = en::get(&restored, &session, &request_path).await;
+    assert!(
+        receipt_after == receipt_before,
+        "restored accepted transcript changed"
+    );
+    // Receipt verification after a real restore must also work for the admitted
+    // target, which is neither the owner nor the grant's original anchor.
+    let (status, body) = restored
+        .login(&target.email, &target.password, &target.device)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let target_session = restored.session(target.email, target.password, target.device, body);
+    let target_receipt: OwnDeviceRequestState =
+        en::get(&restored, &target_session, &request_path).await;
+    assert!(
+        target_receipt == receipt_before,
+        "restored target receipt changed"
+    );
+    let head: SignedSharingOwnDevicesGrantState = en::get(
+        &restored,
+        &target_session,
+        &en::grant_path(grant.grant.scope.share_id, grant.grant.grant_id),
+    )
+    .await;
+    assert_eq!(
+        en::grant_hash(&head),
+        accepted.acceptance.acceptance.consumed_grant_successor_hash
+    );
+    let history: OwnDevicesGrantHistoryPage = en::get(
+        &restored,
+        &target_session,
+        &format!(
+            "{}/history",
+            en::grant_path(grant.grant.scope.share_id, grant.grant.grant_id)
+        ),
+    )
+    .await;
+    assert!(
+        history.states == vec![grant, accepted.consumed_grant_successor],
+        "restored grant chain changed"
+    );
+    assert_eq!(
+        restored
+            .post(
+                &format!("{request_path}/accept"),
+                Some(&session.access),
+                &acceptance
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT,
+        "restore must not permit replay"
+    );
+    assert_eq!(
+        restored
+            .db_scalar_i64("SELECT count(*) FROM shared_enrollment_challenges")
+            .await,
+        1
+    );
+    let caps = consolecrypt_server::sharing::service::capabilities(
+        &restored.state,
+        &common::sharing::context(&session),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        caps.server_instance_id,
+        shared_before.access.manifest.server_instance_id
+    );
     let (s, after) = restored.changes(&session, vault.id, 0).await;
     assert_eq!(s, StatusCode::OK);
     let after: ChangesResponse = serde_json::from_value(after).unwrap();

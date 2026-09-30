@@ -263,6 +263,13 @@ config:
   # cc_request_proofs_total). The ingress must not rewrite request paths or
   # queries (they are signed).
   requireRequestProof: true
+  # -- Experimental object sharing and independent extensions. All default off.
+  # Any true flag requires strict request proofs. Extensions also require
+  # objectSharingEnabled=true. Enabling requires joint client/server acceptance.
+  objectSharingEnabled: false
+  sharedGroupsEnabled: false
+  sharedSecretsEnabled: false
+  sharingOwnerOnlineEnrollmentEnabled: false
   log:
     # -- json | pretty (CC_LOG_FORMAT).
     format: json

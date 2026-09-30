@@ -11,6 +11,9 @@
 
 #![allow(dead_code)]
 
+pub mod enrollment;
+pub mod sharing;
+
 use cc_protocol::auth::{AuthResponse, SecretString};
 use cc_protocol::devices::DeviceRegistration;
 use cc_protocol::envelopes::{

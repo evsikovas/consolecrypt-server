@@ -44,6 +44,13 @@ pub struct Config {
     /// When explicitly false (migration opt-out), invalid proofs are still
     /// rejected but missing ones are only counted.
     pub require_request_proof: bool,
+    /// Experimental ADR-0008 backend; disabled until joint acceptance.
+    pub object_sharing_enabled: bool,
+    /// ADR-0009 kind capabilities; each requires general sharing and proofs.
+    pub shared_groups_enabled: bool,
+    pub shared_secrets_enabled: bool,
+    /// Owner-online enrollment; requires sharing and strict device proofs.
+    pub sharing_owner_online_enrollment_enabled: bool,
     pub event_bus: EventBusKind,
     pub metrics_listen: Option<SocketAddr>,
     pub log_format: LogFormat,
@@ -233,6 +240,26 @@ impl Config {
                 "CC_REQUIRE_REQUEST_PROOF",
                 true,
             )?,
+            object_sharing_enabled: parse_bool(
+                get("CC_OBJECT_SHARING_ENABLED"),
+                "CC_OBJECT_SHARING_ENABLED",
+                false,
+            )?,
+            shared_groups_enabled: parse_bool(
+                get("CC_SHARED_GROUPS_ENABLED"),
+                "CC_SHARED_GROUPS_ENABLED",
+                false,
+            )?,
+            shared_secrets_enabled: parse_bool(
+                get("CC_SHARED_SECRETS_ENABLED"),
+                "CC_SHARED_SECRETS_ENABLED",
+                false,
+            )?,
+            sharing_owner_online_enrollment_enabled: parse_bool(
+                get("CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED"),
+                "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED",
+                false,
+            )?,
             trust_proxy_headers: parse_bool(
                 get("CC_TRUST_PROXY_HEADERS"),
                 "CC_TRUST_PROXY_HEADERS",
@@ -354,6 +381,19 @@ impl Config {
     /// zero interval panicking tokio timers).
     pub fn validate(&self) -> Result<(), ConfigError> {
         let err = |m: &str| Err(ConfigError(m.to_owned()));
+        if self.object_sharing_enabled && !self.require_request_proof {
+            return err("object sharing requires CC_REQUIRE_REQUEST_PROOF=true");
+        }
+        if (self.shared_groups_enabled || self.shared_secrets_enabled)
+            && (!self.object_sharing_enabled || !self.require_request_proof)
+        {
+            return err("shared groups/secrets require object sharing and strict request proofs");
+        }
+        if self.sharing_owner_online_enrollment_enabled
+            && (!self.object_sharing_enabled || !self.require_request_proof)
+        {
+            return err("own-device enrollment requires object sharing and strict request proofs");
+        }
         let r = &self.retention;
         for (name, days) in [
             ("CC_RETENTION_SESSION_DAYS", r.session_days),
@@ -463,6 +503,13 @@ impl fmt::Debug for Config {
             .field("refresh_token_ttl", &self.refresh_token_ttl)
             .field("trust_proxy_headers", &self.trust_proxy_headers)
             .field("require_request_proof", &self.require_request_proof)
+            .field("object_sharing_enabled", &self.object_sharing_enabled)
+            .field("shared_groups_enabled", &self.shared_groups_enabled)
+            .field("shared_secrets_enabled", &self.shared_secrets_enabled)
+            .field(
+                "sharing_owner_online_enrollment_enabled",
+                &self.sharing_owner_online_enrollment_enabled,
+            )
             .field("event_bus", &self.event_bus)
             .field("metrics_listen", &self.metrics_listen)
             .field("log_format", &self.log_format)
@@ -558,5 +605,57 @@ mod tests {
         assert!(cfg(&[("CC_DATABASE_URL", "x"), ("CC_RUN_MIGRATIONS", "maybe")]).is_err());
         let c = cfg(&[("CC_DATABASE_URL", "x"), ("CC_METRICS_LISTEN", "off")]).unwrap();
         assert!(c.metrics_listen.is_none());
+    }
+}
+
+#[cfg(test)]
+mod sharing_config_tests {
+    use super::Config;
+
+    #[test]
+    fn extended_kinds_require_explicit_independent_flags_and_strict_sharing() {
+        for flag in [
+            "CC_SHARED_GROUPS_ENABLED",
+            "CC_SHARED_SECRETS_ENABLED",
+            "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED",
+        ] {
+            let load = |sharing: bool, proofs: bool, value: &str| {
+                Config::from_lookup(|key| match key {
+                    "CC_DATABASE_URL" => Some("postgres://localhost/unused".into()),
+                    "CC_OBJECT_SHARING_ENABLED" => Some(sharing.to_string()),
+                    "CC_REQUIRE_REQUEST_PROOF" => Some(proofs.to_string()),
+                    key if key == flag => Some(value.into()),
+                    _ => None,
+                })
+            };
+            assert!(load(false, true, "true").is_err());
+            assert!(load(true, false, "true").is_err());
+            assert!(load(true, true, "invalid").is_err());
+            let config = load(true, true, "true").unwrap();
+            assert_eq!(
+                config.shared_groups_enabled,
+                flag == "CC_SHARED_GROUPS_ENABLED"
+            );
+            assert_eq!(
+                config.shared_secrets_enabled,
+                flag == "CC_SHARED_SECRETS_ENABLED"
+            );
+            assert_eq!(
+                config.sharing_owner_online_enrollment_enabled,
+                flag == "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED"
+            );
+        }
+        let defaults = Config::for_tests("postgres://localhost/unused");
+        assert!(!defaults.shared_groups_enabled && !defaults.shared_secrets_enabled);
+    }
+
+    #[test]
+    fn sharing_is_opt_in_and_requires_sender_constrained_tokens() {
+        let mut config = Config::for_tests("postgres://localhost/unused");
+        assert!(!config.object_sharing_enabled);
+        config.object_sharing_enabled = true;
+        assert!(config.validate().is_ok());
+        config.require_request_proof = false;
+        assert!(config.validate().is_err());
     }
 }

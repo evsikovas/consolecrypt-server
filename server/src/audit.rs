@@ -42,6 +42,14 @@ pub enum AuditType {
     VaultProofFailed,
     SyncPush,
     AdminAction,
+    ShareCreated,
+    ShareAccessRotated,
+    ShareRevision,
+    ShareEnrollmentGrant,
+    ShareEnrollmentRequest,
+    ShareEnrollmentChallenge,
+    ShareEnrollmentResponse,
+    ShareEnrollmentAccepted,
 }
 
 impl AuditType {
@@ -76,6 +84,14 @@ impl AuditType {
             AuditType::VaultProofFailed => "vault_proof_failed",
             AuditType::SyncPush => "sync_push",
             AuditType::AdminAction => "admin_action",
+            AuditType::ShareCreated => "share_created",
+            AuditType::ShareAccessRotated => "share_access_rotated",
+            AuditType::ShareRevision => "share_revision",
+            AuditType::ShareEnrollmentGrant => "share_enrollment_grant",
+            AuditType::ShareEnrollmentRequest => "share_enrollment_request",
+            AuditType::ShareEnrollmentChallenge => "share_enrollment_challenge",
+            AuditType::ShareEnrollmentResponse => "share_enrollment_response",
+            AuditType::ShareEnrollmentAccepted => "share_enrollment_accepted",
         }
     }
 }

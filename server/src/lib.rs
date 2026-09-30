@@ -28,6 +28,7 @@ pub mod meta;
 pub mod middleware;
 pub mod ratelimit;
 pub mod recovery;
+pub mod sharing;
 pub mod state;
 pub mod sync;
 pub mod telemetry;
@@ -77,6 +78,7 @@ pub fn build_router(state: AppState) -> Router {
     // Everything below requires principal A: bearer token + (protocol 1.5)
     // per-request device proof, established by `auth::middleware`.
     let authed = Router::new()
+        .merge(sharing::handlers::routes())
         // auth (authenticated)
         .route(paths::AUTH_LOGOUT, post(a::logout))
         .route(paths::AUTH_ME, get(a::me))
