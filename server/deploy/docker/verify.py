@@ -115,7 +115,7 @@ def main():
             assert request(origin, "/healthz").strip() == b"ok"
             assert request(origin, "/readyz").strip() == b"ready"
             meta = json.loads(request(origin, "/v1/meta"))
-            assert meta["server_version"] == "0.1.10"
+            assert meta["server_version"] == "0.1.11"
             assert meta["protocol_version"] == "1.5"
             assert meta["source_code_url"] == config.SOURCE
             assert meta["email_verification_required"] is True
