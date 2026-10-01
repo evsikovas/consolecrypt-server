@@ -34,12 +34,11 @@ Caddy. Постоянные данные лежат в Docker volumes. Наст�
 
 ### Получите пример и создайте приватную конфигурацию
 
-Для Docker возьмите **текущую `main`**: новые Compose-файлы отсутствуют в старом
-commit `2adfba0`. Сам сервер при этом закреплён за опубликованным образом
-**0.1.10**, протокол **1.5**, для `linux/amd64` и `linux/arm64`:
+Для Docker возьмите **текущую `main`**. Пример закреплён за проверенным серверным образом
+**0.1.11**, протокол **1.5**, для `linux/amd64` и `linux/arm64`:
 
 ```text
-registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8
+registry.evsikov.net/publics/consolecrypt/server@sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2
 ```
 
 В отдельном терминале Bash:
@@ -132,7 +131,7 @@ curl --fail --silent --show-error "$CC_API_ORIGIN/readyz"
 curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
 ```
 
-Ожидаются `ok`, `ready`, `server_version: "0.1.10"` и `protocol_version: "1.5"`.
+Ожидаются `ok`, `ready`, `server_version: "0.1.11"` и `protocol_version: "1.5"`.
 Проверяйте HTTPS без `curl -k`, в том числе с другой машины. В клиенте создайте
 профиль с `https://sync.example.org` **без `/v1`**. Зарегистрируйтесь, проверьте
 доставку письма и подтвердите код через API, как описано в разделе 6 ниже.
@@ -239,7 +238,7 @@ curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta"
 использует случайные loopback-порты и удаляет только свои контейнеры и volumes:
 
 ```sh
-docker pull registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8
+docker pull registry.evsikov.net/publics/consolecrypt/server@sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2
 docker pull postgres:16-alpine
 docker pull caddy:2-alpine
 python3 server/deploy/docker/verify.py
@@ -263,17 +262,17 @@ SMTP-почты — эти проверки нужно выполнить для
 
 | Компонент | Версия |
 |---|---|
-| Сервер | `0.1.10` |
+| Сервер | `0.1.11` |
 | Протокол | `1.5` |
-| Helm chart | `0.1.12` |
+| Helm chart | `0.1.13` |
 | PostgreSQL | `16` |
 | Архитектуры образа | `linux/amd64`, `linux/arm64` |
 
-Образ: `registry.evsikov.net/publics/consolecrypt/server:0.1.10`.
+Образ: `registry.evsikov.net/publics/consolecrypt/server:0.1.11-8d2213f5bc24`.
 Для воспроизводимой установки используйте его digest:
 
 ```text
-registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8
+registry.evsikov.net/publics/consolecrypt/server@sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2
 ```
 
 Получите соответствующий chart из исходников:
@@ -281,7 +280,7 @@ registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccf
 ```sh
 git clone https://git.evsikov.net/publics/consolecrypt.git
 cd consolecrypt
-git checkout --detach 2adfba091109dc92befcbca2b6d111f4649a98c0
+git checkout --detach 8d2213f5bc24bd94a4eac6ee85f132ac3bd5600a
 ```
 
 При следующем обновлении меняйте digest и исходники chart согласованно.
@@ -290,8 +289,8 @@ git checkout --detach 2adfba091109dc92befcbca2b6d111f4649a98c0
 Образ можно предварительно проверить Docker-командами:
 
 ```sh
-docker pull registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8
-docker run --rm --network none registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8 --version
+docker pull registry.evsikov.net/publics/consolecrypt/server@sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2
+docker run --rm --network none registry.evsikov.net/publics/consolecrypt/server@sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2 --version
 ```
 
 В репозитории также есть `server/docker-compose.yml`: это вариант для локальной
@@ -429,8 +428,8 @@ fullnameOverride: consolecrypt
 replicaCount: 1
 image:
   repository: registry.evsikov.net/publics/consolecrypt/server
-  tag: "0.1.10"
-  digest: sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8
+  tag: "0.1.11-8d2213f5bc24"
+  digest: sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2
   pullPolicy: IfNotPresent
 
 database:
@@ -441,7 +440,7 @@ postgresql:
 
 config:
   publicUrl: ""
-  sourceCodeUrl: https://git.evsikov.net/publics/consolecrypt/-/tree/2adfba091109dc92befcbca2b6d111f4649a98c0
+  sourceCodeUrl: https://git.evsikov.net/publics/consolecrypt/-/tree/8d2213f5bc24bd94a4eac6ee85f132ac3bd5600a
   registrationOpen: true
   requireEmailVerification: true
   requireRequestProof: true
@@ -546,7 +545,7 @@ curl --fail --silent --show-error "$CC_API_ORIGIN/readyz"
 curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
 ```
 
-Ожидаются HTTP 200, ответы `ok`, `ready` и JSON с `server_version: "0.1.10"`,
+Ожидаются HTTP 200, ответы `ok`, `ready` и JSON с `server_version: "0.1.11"`,
 `protocol_version: "1.5"` и выбранной `source_code_url`. Readiness проверяет
 соединение с базой; успешный ответ ещё не подтверждает доставку почты или
 синхронизацию. Не используйте `curl -k`: клиенту нужен доверенный сертификат.
