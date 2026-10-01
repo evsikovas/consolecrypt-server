@@ -1,0 +1,26 @@
+[Unit]
+Description=ConsoleCrypt sync server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=consolecrypt
+Group=consolecrypt
+ExecStart=/usr/local/bin/consolecrypt-server --config /etc/consolecrypt/server.json serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

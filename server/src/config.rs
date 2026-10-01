@@ -5,12 +5,16 @@
 //!
 //! Secret-bearing values (database URL, SMTP password) are redacted in `Debug`.
 
+#[cfg(test)]
 use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
+
+mod file;
+pub use file::ConfigSource;
 
 /// Default AGPL §13 source offer (ADR-0005). Operators of modified builds must
 /// set `CC_SOURCE_CODE_URL` to where their modified source can be obtained.
@@ -149,8 +153,8 @@ pub struct ConfigError(String);
 impl Config {
     /// Read configuration from the process environment.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let vars: HashMap<String, String> = std::env::vars().collect();
-        Self::from_lookup(|k| vars.get(k).cloned())
+        let source = ConfigSource::load(None)?;
+        Self::from_lookup(|k| source.get(k))
     }
 
     /// Read configuration through `get` (testable without touching the env).
@@ -179,15 +183,17 @@ impl Config {
                     "tls" => SmtpTls::Tls,
                     "starttls" => SmtpTls::StartTls,
                     "none" => SmtpTls::None,
-                    other => {
-                        return Err(ConfigError(format!("CC_SMTP_TLS: unknown value {other:?}")))
+                    _ => {
+                        return Err(ConfigError(
+                            "CC_SMTP_TLS: expected tls, starttls or none".into(),
+                        ))
                     }
                 },
             },
-            other => {
-                return Err(ConfigError(format!(
-                    "CC_MAIL_TRANSPORT: unknown value {other:?} (disabled|file|smtp)"
-                )))
+            _ => {
+                return Err(ConfigError(
+                    "CC_MAIL_TRANSPORT: expected disabled, file or smtp".into(),
+                ))
             }
         };
 
@@ -268,21 +274,13 @@ impl Config {
             event_bus: match get("CC_EVENT_BUS").as_deref().unwrap_or("postgres") {
                 "postgres" => EventBusKind::Postgres,
                 "local" => EventBusKind::Local,
-                other => {
-                    return Err(ConfigError(format!(
-                        "CC_EVENT_BUS: unknown value {other:?}"
-                    )))
-                }
+                _ => return Err(ConfigError("CC_EVENT_BUS: unsupported value".into())),
             },
             metrics_listen,
             log_format: match get("CC_LOG_FORMAT").as_deref().unwrap_or("json") {
                 "json" => LogFormat::Json,
                 "pretty" | "text" => LogFormat::Pretty,
-                other => {
-                    return Err(ConfigError(format!(
-                        "CC_LOG_FORMAT: unknown value {other:?}"
-                    )))
-                }
+                _ => return Err(ConfigError("CC_LOG_FORMAT: unsupported value".into())),
             },
             hsts: parse_bool(get("CC_HSTS"), "CC_HSTS", true)?,
             password_hashing: PasswordHashingConfig {

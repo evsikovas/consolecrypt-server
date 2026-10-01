@@ -1,0 +1,15 @@
+{
+  "CC_DATABASE_URL": "postgres://consolecrypt@127.0.0.1:5432/consolecrypt",
+  "CC_DATABASE_PASSWORD": "",
+  "CC_LISTEN_ADDR": "127.0.0.1:8080",
+  "CC_METRICS_LISTEN": "127.0.0.1:9090",
+  "CC_REQUIRE_EMAIL_VERIFICATION": "true",
+  "CC_REQUIRE_REQUEST_PROOF": "true",
+  "CC_MAIL_TRANSPORT": "smtp",
+  "CC_MAIL_FROM": "ConsoleCrypt <no-reply@example.org>",
+  "CC_SMTP_HOST": "smtp.example.org",
+  "CC_SMTP_PORT": "587",
+  "CC_SMTP_TLS": "starttls",
+  "CC_SMTP_USERNAME": "mailer@example.org",
+  "CC_SMTP_PASSWORD": ""
+}

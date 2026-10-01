@@ -4,7 +4,11 @@
 //! `consolecrypt-server` binary: `serve` (default), `migrate`, `admin …`.
 
 use clap::{Parser, Subcommand};
-use consolecrypt_server::{admin, config::LogFormat, db, telemetry, Config};
+use consolecrypt_server::{
+    admin,
+    config::{ConfigSource, LogFormat},
+    db, telemetry, Config,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -19,9 +23,12 @@ use consolecrypt_server::{admin, config::LogFormat, db, telemetry, Config};
     after_help = "Author: Alexander Evsikov <i@evsikov.net> · License: AGPL-3.0-only",
     about = "ConsoleCrypt zero-knowledge sync server (AGPL-3.0-only)",
     long_about = "ConsoleCrypt zero-knowledge sync server.\n\n\
-                  Configuration is read from CC_* environment variables (see .env.example)."
+                  Configuration: CC_* environment variables override an optional --config JSON file."
 )]
 struct Cli {
+    /// Private JSON configuration file (or CC_CONFIG_FILE); environment takes precedence.
+    #[arg(long, global = true)]
+    config: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -91,10 +98,11 @@ enum AdminCommand {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let source = ConfigSource::load(cli.config.as_deref())?;
     if matches!(cli.command, Some(Command::Healthcheck)) {
-        return healthcheck().await;
+        return healthcheck(source.get("CC_LISTEN_ADDR")).await;
     }
-    let config = Config::from_env()?;
+    let config = Config::from_lookup(|key| source.get(key))?;
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => {
             let _telemetry = telemetry::init_tracing(config.log_format);
@@ -161,12 +169,14 @@ async fn run_admin(pool: &sqlx::PgPool, config: &Config, cmd: AdminCommand) -> a
 }
 
 /// Minimal HTTP/1.1 probe without an HTTP client dependency.
-async fn healthcheck() -> anyhow::Result<()> {
+async fn healthcheck(listen: Option<String>) -> anyhow::Result<()> {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-    let listen: std::net::SocketAddr = std::env::var("CC_LISTEN_ADDR")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 8080)));
+    let listen: std::net::SocketAddr = match listen {
+        Some(value) if !value.trim().is_empty() => value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("CC_LISTEN_ADDR: invalid socket address"))?,
+        _ => std::net::SocketAddr::from(([0, 0, 0, 0], 8080)),
+    };
     let target = std::net::SocketAddr::from(([127, 0, 0, 1], listen.port()));
     let probe = async {
         let mut stream = tokio::net::TcpStream::connect(target).await?;
