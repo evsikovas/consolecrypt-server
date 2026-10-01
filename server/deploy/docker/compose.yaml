@@ -34,7 +34,7 @@ services:
     logging: *logging
 
   server:
-    image: ${CC_SERVER_IMAGE:-registry.evsikov.net/publics/consolecrypt/server@sha256:7387d10a7e6e62d161e0154ce064a6ebe15999c338f33bb5df80691aca745301}
+    image: ${CC_SERVER_IMAGE:-registry.evsikov.net/publics/consolecrypt/server@sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -47,7 +47,7 @@ services:
       CC_LISTEN_ADDR: 0.0.0.0:8080
       CC_METRICS_LISTEN: "off"
       CC_PUBLIC_URL: ""
-      CC_SOURCE_CODE_URL: ${CC_SOURCE_CODE_URL:-https://git.evsikov.net/publics/consolecrypt/-/tree/960d0b6cf02367d2afa9813db7b8b3b5fd3ad7a2}
+      CC_SOURCE_CODE_URL: ${CC_SOURCE_CODE_URL:-https://git.evsikov.net/publics/consolecrypt/-/tree/8d2213f5bc24bd94a4eac6ee85f132ac3bd5600a}
       CC_REGISTRATION_OPEN: ${CC_REGISTRATION_OPEN:-true}
       CC_REQUIRE_EMAIL_VERIFICATION: "true"
       CC_REQUIRE_REQUEST_PROOF: "true"
