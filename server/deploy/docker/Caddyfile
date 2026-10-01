@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
+{$CC_DOMAIN} {
+	# No rewrite/handle_path: device proofs sign the exact request target/body.
+	# reverse_proxy handles WebSocket upgrades and replaces untrusted XFF.
+	@api path /v1 /v1/* /healthz /readyz
+	handle @api {
+		reverse_proxy server:8080
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

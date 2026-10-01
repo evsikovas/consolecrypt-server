@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
+# Always supply the private server.env with --env-file. See docs/public/HOSTING.md.
+name: consolecrypt-selfhost
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: consolecrypt
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CC_POSTGRES_ADMIN_PASSWORD:?Run init-config.py first}
+      CC_DATABASE_PASSWORD: ${CC_DATABASE_PASSWORD:?Run init-config.py first}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-consolecrypt.sql:ro
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d consolecrypt"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+    stop_grace_period: 60s
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  server:
+    image: ${CC_SERVER_IMAGE:-registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CC_DATABASE_URL: postgres://consolecrypt@postgres:5432/consolecrypt
+      CC_DATABASE_PASSWORD: ${CC_DATABASE_PASSWORD:?Run init-config.py first}
+      CC_DATABASE_CONNECT_TIMEOUT_SECS: "60"
+      CC_RUN_MIGRATIONS: ${CC_RUN_MIGRATIONS:-true}
+      CC_LISTEN_ADDR: 0.0.0.0:8080
+      CC_METRICS_LISTEN: "off"
+      CC_PUBLIC_URL: ""
+      CC_SOURCE_CODE_URL: ${CC_SOURCE_CODE_URL:-https://git.evsikov.net/publics/consolecrypt/-/tree/2adfba091109dc92befcbca2b6d111f4649a98c0}
+      CC_REGISTRATION_OPEN: ${CC_REGISTRATION_OPEN:-true}
+      CC_REQUIRE_EMAIL_VERIFICATION: "true"
+      CC_REQUIRE_REQUEST_PROOF: "true"
+      CC_TRUST_PROXY_HEADERS: "true"
+      CC_EVENT_BUS: postgres
+      CC_HSTS: "true"
+      CC_LOG_FORMAT: json
+      CC_MAIL_TRANSPORT: ${CC_MAIL_TRANSPORT:-smtp}
+      CC_MAIL_FROM: ${CC_MAIL_FROM:?Run init-config.py first}
+      CC_SMTP_HOST: ${CC_SMTP_HOST:-}
+      CC_SMTP_PORT: ${CC_SMTP_PORT:-587}
+      CC_SMTP_TLS: ${CC_SMTP_TLS:-starttls}
+      CC_SMTP_USERNAME: ${CC_SMTP_USERNAME:-}
+      CC_SMTP_PASSWORD: ${CC_SMTP_PASSWORD:-}
+      CC_OBJECT_SHARING_ENABLED: ${CC_OBJECT_SHARING_ENABLED:-false}
+      CC_SHARED_GROUPS_ENABLED: ${CC_SHARED_GROUPS_ENABLED:-false}
+      CC_SHARED_SECRETS_ENABLED: ${CC_SHARED_SECRETS_ENABLED:-false}
+      CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED: ${CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED:-false}
+    ports:
+      - "127.0.0.1:${CC_HTTP_PORT:-8080}:8080"
+    networks: [database, frontend]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    stop_grace_period: 30s
+    # The immutable distroless image includes a binary /readyz healthcheck.
+    # Do not replace it with curl, wget, a shell or a *_FILE wrapper.
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      CC_DOMAIN: ${CC_DOMAIN:?Run init-config.py first}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [frontend]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    logging: *logging
+
+networks:
+  database:
+    internal: true
+  frontend:
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

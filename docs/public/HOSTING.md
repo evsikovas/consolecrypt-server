@@ -4,9 +4,254 @@
 хранилищ. Расшифровка происходит в клиенте; SSH-соединения клиент устанавливает
 непосредственно с вашими хостами.
 
-Ниже — установка в Kubernetes/k3s через Helm с PostgreSQL и SMTP. Домен
-`sync.example.org`, адрес базы и почтовые настройки в примерах нужно заменить
-своими. Все команды выполняются из корня исходников, если не указано иначе.
+Выберите один способ: [Docker Compose на одном сервере](#docker-compose)
+или [Kubernetes/k3s через Helm](#kubernetes-helm). Оба запускают только API
+с PostgreSQL и SMTP. Домен `sync.example.org`, адрес базы и почтовые настройки
+в примерах нужно заменить своими. Все команды выполняются из корня исходников,
+если не указано иначе.
+
+## Docker Compose
+
+Установка на одном сервере без Kubernetes.
+
+### Что понадобится
+
+Linux-сервер с Docker Engine, Docker Compose **2.24.4 или новее** (либо 5.x),
+Python **3.9 или новее** и свободным диском для PostgreSQL 16. Для HTTPS нужны
+домен с DNS A/AAAA на этот сервер и доступные извне TCP-порты 80 и 443.
+UDP 443 используется Caddy для HTTP/3; при его блокировке остаётся HTTPS по TCP.
+На этих портах не должен одновременно работать другой proxy.
+
+Вариант рассчитан на один узел: PostgreSQL без репликации, API и необязательный
+Caddy. Постоянные данные лежат в Docker volumes. Настройте резервные копии
+вне этого узла и автозапуск Docker после перезагрузки.
+
+Файлы: [compose.yaml](../../server/deploy/docker/compose.yaml),
+[Caddyfile](../../server/deploy/docker/Caddyfile),
+[справочник переменных](../../server/deploy/docker/.env.example).
+Старый `server/docker-compose.yml` остаётся отдельным вариантом для разработки
+с пересборкой исходников и записью писем в файлы.
+
+### Получите пример и создайте приватную конфигурацию
+
+Для Docker возьмите **текущую `main`**: новые Compose-файлы отсутствуют в старом
+commit `2adfba0`. Сам сервер при этом закреплён за опубликованным образом
+**0.1.10**, протокол **1.5**, для `linux/amd64` и `linux/arm64`:
+
+```text
+registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8
+```
+
+В отдельном терминале Bash:
+
+```sh
+set -euo pipefail
+git clone --branch main --single-branch https://git.evsikov.net/publics/consolecrypt.git
+cd consolecrypt
+export CC_COMPOSE_FILE="$PWD/server/deploy/docker/compose.yaml"
+export CC_INSTALL_DIR="$HOME/.config/consolecrypt-docker"
+export CC_API_ORIGIN="https://sync.example.org"
+umask 077
+docker context show
+docker compose version
+
+python3 server/deploy/docker/init-config.py \
+  --directory "$CC_INSTALL_DIR" --domain sync.example.org
+```
+
+Проверьте, что выбран Docker нужного сервера. Генератор создаёт каталог с правами
+0700 и `server.env` с правами 0600 **вне исходников**, генерирует разные случайные
+пароли администратора PostgreSQL и пользователя приложения, а SMTP-пароль
+спрашивает без отображения. При существующем `server.env` он откажется продолжать:
+повторная генерация пароля не меняет пароль уже созданной базы.
+
+Укажите SMTP host, отправителя, порт, режим TLS и логин. Для 587 обычно нужен
+`starttls`, для 465 — `tls`; отправитель должен быть разрешён вашим SMTP.
+Для частной установки без почты добавьте генератору `--mail-disabled`:
+подтверждать email тогда должен администратор, автоматический сброс по почте
+работать не будет. Подтверждение email и подписи запросов остаются обязательными.
+
+Не добавляйте `server.env` в Git, не выполняйте `source server.env` и не выводите
+`docker compose config` без `--quiet`: итоговая конфигурация содержит пароли.
+Не включайте `set -x`. Compose берёт значения из `--env-file`, но одноимённые
+переменные текущего shell имеют приоритет: используйте чистый терминал.
+Подробности — в [документации Docker об интерполяции](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/).
+Доступ к Docker daemon позволяет читать переменные контейнера; ограничьте его
+администраторами. Сервер не понимает `*_FILE`: пароль базы передаётся отдельным
+`CC_DATABASE_PASSWORD`, без помещения в URL. Shell-wrapper для distroless не нужен.
+
+### Запустите PostgreSQL, API и HTTPS
+
+Сохраните функцию в этом терминале и используйте её для следующих команд:
+
+```sh
+cc_compose() {
+  docker compose --env-file "$CC_INSTALL_DIR/server.env" \
+    -f "$CC_COMPOSE_FILE" --profile https "$@"
+}
+
+cc_compose config --quiet
+cc_compose pull
+cc_compose run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile
+cc_compose up -d --wait --wait-timeout 180
+cc_compose ps
+```
+
+PostgreSQL и API должны стать `healthy`; Caddy — `running`.
+Сервер использует встроенную проверку `/readyz` в бинарном файле: устанавливать
+в образ `curl` или shell не требуется. При первом старте PostgreSQL создаёт
+роль `consolecrypt`, которая владеет своей базой, но не является суперпользователем.
+Затем API применяет миграции. Зависимости с `service_healthy` описаны в
+[документации Compose](https://docs.docker.com/compose/how-tos/startup-order/).
+
+Caddy получает и продлевает доверенный сертификат автоматически. Для этого DNS,
+маршрутизация и входящие порты должны работать; статус `running` ещё не доказывает,
+что сертификат выдан. Подробности — [Automatic HTTPS](https://caddyserver.com/docs/automatic-https).
+Сертификаты сохраняются в `caddy_data`, настройки Caddy — в `caddy_config`.
+
+API опубликован на **127.0.0.1:8080** хоста. PostgreSQL 5432 не опубликован,
+метрики отключены. Caddy передаёт только `/v1`, `/v1/*`, `/healthz` и `/readyz`;
+корень сайта и `/account` вернут 404. Сайт или аналитика не устанавливаются.
+`CC_PUBLIC_URL` намеренно пуст, чтобы письма содержали код без ссылки на
+несуществующий кабинет. В клиент вводится `CC_API_ORIGIN`, а не `CC_PUBLIC_URL`.
+
+Если у вас уже есть HTTPS reverse proxy на этом хосте, уберите `--profile https`
+из функции и настройте proxy на `http://127.0.0.1:8080`. Он должен перезаписывать
+недоверенный `X-Forwarded-For`, передавать WebSocket `/v1/events/ws`, принимать
+тела до 16 MiB и не менять path, query или body подписанных запросов.
+Пример [Caddy reverse_proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
+делает это без `handle_path` и rewrite. Пример предполагает один доверенный proxy;
+не открывайте API-порт наружу. При конфликте локального 8080 измените `CC_HTTP_PORT`
+в приватном файле и соответствующий upstream своего proxy.
+
+### Проверьте и подключите клиент
+
+```sh
+curl --fail --silent --show-error "$CC_API_ORIGIN/healthz"
+curl --fail --silent --show-error "$CC_API_ORIGIN/readyz"
+curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
+```
+
+Ожидаются `ok`, `ready`, `server_version: "0.1.10"` и `protocol_version: "1.5"`.
+Проверяйте HTTPS без `curl -k`, в том числе с другой машины. В клиенте создайте
+профиль с `https://sync.example.org` **без `/v1`**. Зарегистрируйтесь, проверьте
+доставку письма и подтвердите код через API, как описано в разделе 6 ниже.
+При отключённом SMTP оператор после проверки владельца адреса выполняет:
+
+```sh
+cc_compose exec -T server /usr/local/bin/consolecrypt-server \
+  admin verify-email --email user@example.org
+```
+
+Проверьте синхронизацию тестового хоста между двумя доверенными устройствами.
+Для закрытия регистрации измените `CC_REGISTRATION_OPEN=false` в `server.env`
+и выполните `cc_compose up -d --wait --wait-timeout 180 server`.
+
+Четыре флага sharing по умолчанию выключены. Если администратор отдельно решил
+включить совместный доступ и проверил совместимость клиентов, он изменяет
+`CC_OBJECT_SHARING_ENABLED`, `CC_SHARED_GROUPS_ENABLED`, `CC_SHARED_SECRETS_ENABLED`
+и `CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED` в том же приватном файле на `true`,
+затем пересоздаёт только сервис `server` той же командой. Подписи запросов
+остаются обязательными. Основной флаг обязателен для остальных расширений.
+Возможности проверяются авторизованным запросом `/v1/shares/capabilities`,
+а не через `/v1/meta`; ограничения изложены в [SHARING.md](SHARING.md).
+
+### Сохранность данных и резервные копии
+
+Имя Compose-проекта — `consolecrypt-selfhost`; его PostgreSQL volume —
+`consolecrypt-selfhost_pgdata`. Сохраните имя проекта и приватный файл:
+другой `--project-name` создаст другую базу. `cc_compose down` сохраняет volumes,
+но останавливает сервис; `cc_compose up -d --wait --wait-timeout 180` запускает
+его с прежними данными. **Не используйте `down -v` и `docker volume prune`**
+для обновления или обычного перезапуска. После первого создания базы изменение
+паролей в `server.env` само по себе не меняет роли PostgreSQL.
+
+Снимок PostgreSQL создаётся без установки `pg_dump` на хост:
+
+```sh
+umask 077
+CC_BACKUP_DIR="$CC_INSTALL_DIR/backups"
+mkdir -p "$CC_BACKUP_DIR"
+chmod 700 "$CC_BACKUP_DIR"
+CC_BACKUP_FILE="$CC_BACKUP_DIR/consolecrypt-$(date -u +%Y%m%dT%H%M%SZ).dump"
+cc_compose exec -T postgres pg_dump -U postgres -d consolecrypt \
+  --format=custom --no-owner --no-acl > "$CC_BACKUP_FILE"
+chmod 600 "$CC_BACKUP_FILE"
+cc_compose exec -T postgres pg_restore --list \
+  < "$CC_BACKUP_FILE" > "$CC_BACKUP_FILE.list"
+```
+
+Пароль не попадает в argv: команда выполняется через локальный Unix socket
+в контейнере PostgreSQL. Перенесите копию в зашифрованное хранилище вне этого
+узла. Отдельно сохраните `server.env`, версию Compose-файлов и Caddy volumes.
+Резервная копия содержит чувствительные метаданные учётных записей, хотя
+содержимое хранилищ зашифровано. Список архива не заменяет пробное восстановление.
+
+Для проверки создайте **отдельную пустую БД**, не подключённую к рабочим клиентам.
+Следующие команды остановятся, если имя уже занято; для повторного теста
+выберите другое имя и используйте его в обеих командах:
+
+```sh
+cc_compose exec -T postgres createdb -U postgres -O consolecrypt consolecrypt_restore_check
+cc_compose exec -T postgres pg_restore -U postgres --role=consolecrypt \
+  -d consolecrypt_restore_check --exit-on-error --no-owner --no-acl < "$CC_BACKUP_FILE"
+```
+
+Сверьте таблицы, миграции, число записей и `sharing_instance.instance_id`,
+затем проверьте запуск того же образа с копией в изолированном окружении.
+Для полного аварийного восстановления закрывают клиентский доступ, поднимают
+пустую PostgreSQL с сохранёнными настройками, восстанавливают всю базу до
+старта API и проверяют её. После восстановления личных хранилищ и **до**
+возврата клиентского доступа выполните с восстановленной базой:
+
+```sh
+cc_compose run --rm --no-deps server admin rotate-epoch --all
+```
+
+Это не заменяет восстановление доверия общих элементов: у sharing отдельные
+контрольные точки. Сохраняйте UUID экземпляра сервера из полной копии базы;
+подробности приведены в разделе 7 ниже.
+
+### Обновление и проверка примера
+
+Сначала сделайте и проверьте резервную копию. Сохраните прежние Compose-файлы,
+`server.env`, digest и исходники. Для новой версии меняют `CC_SERVER_IMAGE`
+на проверенный immutable digest и `CC_SOURCE_CODE_URL` на её исходники, затем:
+
+```sh
+cc_compose config --quiet
+cc_compose pull server
+cc_compose up -d --wait --wait-timeout 180 server
+curl --fail --silent --show-error "$CC_API_ORIGIN/readyz"
+curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta"
+```
+
+Не меняйте пароли, имя проекта или существующий volume. Проверьте SMTP и
+синхронизацию двух устройств. Миграции встроены в образ; смена образа назад
+**не откатывает схему**. Для заранее проверенного совместимого rollback можно
+указать `CC_RUN_MIGRATIONS=false`, но это не доказывает совместимость старого
+бинарного файла с новой схемой. Не меняйте major PostgreSQL простой сменой тега.
+Образы PostgreSQL и Caddy закреплены по major (`16-alpine`, `2-alpine`): их
+обновления также планируйте отдельно с резервной копией и проверкой.
+
+Разработчик или оператор может повторить smoke-тест примера на отдельной
+машине с Docker. Он создаёт только уникальный временный Compose-проект,
+использует случайные loopback-порты и удаляет только свои контейнеры и volumes:
+
+```sh
+docker pull registry.evsikov.net/publics/consolecrypt/server@sha256:27d60ab711047dd27066eccfd0f7149b24490f40b85011adda1b85bae105bcc8
+docker pull postgres:16-alpine
+docker pull caddy:2-alpine
+python3 server/deploy/docker/verify.py
+```
+
+Тест проверяет API, HTTPS с временным локальным CA (без отключения проверки
+сертификата), PostgreSQL role, backup/restore и сохранность после `down/up`.
+Он не проверяет ваш DNS, выдачу публичного сертификата ACME и доставку вашей
+SMTP-почты — эти проверки нужно выполнить для собственной установки.
+
+<a id="kubernetes-helm"></a>
+## Kubernetes / k3s через Helm
 
 ## 1. Подготовьте окружение и версию
 
@@ -53,7 +298,8 @@ docker run --rm --network none registry.evsikov.net/publics/consolecrypt/server@
 В репозитории также есть `server/docker-compose.yml`: это вариант для локальной
 разработки с пересборкой исходников, PostgreSQL и записью писем в файлы.
 Его настройки по умолчанию не являются готовой установкой с HTTPS и SMTP.
-Для постоянного использования ниже приведён полный путь через Helm.
+Для установки с готовым образом используйте Docker-раздел выше или полный
+путь через Helm ниже.
 
 ## 2. Выберите кластер и приватный каталог
 
