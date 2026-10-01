@@ -265,7 +265,7 @@ pub async fn approve_device(
         }
         vault_ids.push(ve.vault_id);
     }
-    if (Utc::now().timestamp() - req.issued_at).abs() > MAX_SIGNATURE_SKEW_SECONDS {
+    if Utc::now().timestamp().abs_diff(req.issued_at) > MAX_SIGNATURE_SKEW_SECONDS as u64 {
         return Err(AppError::invalid_proof(
             "approval issued_at is outside the allowed clock skew",
         ));

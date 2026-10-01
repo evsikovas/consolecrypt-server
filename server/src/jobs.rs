@@ -79,7 +79,10 @@ pub fn spawn(state: AppState) {
                     tracing::info!(report = ?report, "maintenance pass finished")
                 }
                 Ok(_) => tracing::debug!("maintenance skipped: another replica holds the lock"),
-                Err(err) => tracing::warn!(error = %err, "maintenance pass failed"),
+                Err(err) => tracing::warn!(
+                    failure = crate::error::internal_error_kind(&err),
+                    "maintenance pass failed"
+                ),
             }
         }
     });

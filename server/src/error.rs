@@ -24,7 +24,7 @@ pub fn current_request_id() -> Option<RequestId> {
 
 pub type AppResult<T> = Result<T, AppError>;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum AppError {
     #[error("{code:?}: {message}")]
     Api {
@@ -33,10 +33,40 @@ pub enum AppError {
         details: Option<serde_json::Value>,
         retry_after_seconds: Option<u32>,
     },
-    #[error("database error: {0}")]
+    #[error("database error")]
     Db(#[from] sqlx::Error),
-    #[error("internal error: {0}")]
+    #[error("internal error")]
     Internal(#[from] anyhow::Error),
+}
+
+impl std::fmt::Debug for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppError")
+            .field("code", &self.code())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Safe for logs at every level; never format a database's free-form message.
+pub(crate) fn database_error_kind(error: &sqlx::Error) -> &'static str {
+    match error {
+        sqlx::Error::Database(_) => "database",
+        sqlx::Error::PoolTimedOut => "pool_timeout",
+        sqlx::Error::PoolClosed => "pool_closed",
+        sqlx::Error::Io(_) => "io",
+        sqlx::Error::Tls(_) => "tls",
+        sqlx::Error::Protocol(_) => "protocol",
+        sqlx::Error::RowNotFound => "row_not_found",
+        _ => "database_internal",
+    }
+}
+
+/// Keep background/startup anyhow contexts from echoing remote error strings.
+pub(crate) fn internal_error_kind(error: &anyhow::Error) -> &'static str {
+    error
+        .downcast_ref::<sqlx::Error>()
+        .map(database_error_kind)
+        .unwrap_or("internal")
 }
 
 impl AppError {
@@ -178,17 +208,16 @@ impl IntoResponse for AppError {
                 ..
             } => (message, details, retry_after_seconds),
             AppError::Db(err) => {
-                // sqlx error Display carries the server message, never bound
-                // parameter values.
-                tracing::error!(error = %err, "database error");
+                // Server/driver errors are untrusted and can echo input.
+                tracing::error!(failure = database_error_kind(&err), "database error");
                 if code == ErrorCode::Unavailable {
                     ("service temporarily unavailable".into(), None, Some(5))
                 } else {
                     ("internal server error".into(), None, None)
                 }
             }
-            AppError::Internal(err) => {
-                tracing::error!(error = %err, "internal error");
+            AppError::Internal(_) => {
+                tracing::error!("internal error (details redacted)");
                 ("internal server error".into(), None, None)
             }
         };
@@ -230,5 +259,24 @@ where
         None => {
             tokio::spawn(fut.instrument(span));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn database_and_internal_errors_have_redacted_debug_and_display() {
+        let secret = uuid::Uuid::new_v4().to_string();
+        for error in [
+            AppError::Internal(anyhow::anyhow!(secret.clone())),
+            AppError::Db(sqlx::Error::Protocol(secret.clone())),
+        ] {
+            assert!(!format!("{error} {error:?}").contains(&secret));
+        }
+        assert_eq!(
+            database_error_kind(&sqlx::Error::Protocol(secret)),
+            "protocol"
+        );
     }
 }

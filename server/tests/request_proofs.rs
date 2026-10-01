@@ -378,3 +378,34 @@ async fn accept_mode_meters_missing_but_rejects_invalid() {
         "a present but invalid proof is always rejected"
     );
 }
+
+#[tokio::test]
+async fn extreme_signed_timestamps_are_rejected_without_panicking() {
+    let srv = server!();
+    let account = srv.new_account().await;
+    for issued_at in [i64::MIN, i64::MAX] {
+        let proof = request_proof(
+            account.device.id,
+            &account.device.signing,
+            "GET",
+            paths::AUTH_ME,
+            b"",
+            issued_at,
+        );
+        let (status, body) = send(
+            &srv,
+            reqwest::Method::GET,
+            paths::AUTH_ME,
+            &account.access,
+            None,
+            Some(proof),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["details"]["reason"], "stale");
+    }
+    assert_eq!(
+        srv.get(paths::AUTH_ME, &account.access).await.0,
+        StatusCode::OK
+    );
+}

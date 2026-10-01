@@ -181,7 +181,7 @@ impl Events {
                 let payload = match serde_json::to_string(&msg) {
                     Ok(p) => p,
                     Err(err) => {
-                        tracing::error!(error = %err, "cannot serialize event");
+                        tracing::error!(failure = ?err.classify(), "cannot serialize event");
                         return;
                     }
                 };
@@ -191,7 +191,10 @@ impl Events {
                     .execute(pool)
                     .await
                 {
-                    tracing::warn!(error = %err, "failed to publish event");
+                    tracing::warn!(
+                        failure = crate::error::database_error_kind(&err),
+                        "failed to publish event"
+                    );
                 }
             }
         }
@@ -214,7 +217,10 @@ impl Events {
                 self.publish(users.into_iter().map(UserId::from).collect(), event)
                     .await
             }
-            Err(err) => tracing::warn!(error = %err, "cannot resolve vault members for event"),
+            Err(err) => tracing::warn!(
+                failure = crate::error::database_error_kind(&err),
+                "cannot resolve vault members for event"
+            ),
         }
     }
 }
@@ -224,11 +230,16 @@ async fn listen_loop(mut listener: PgListener, hub: Arc<Hub>) {
         match listener.recv().await {
             Ok(notification) => match serde_json::from_str::<BusMessage>(notification.payload()) {
                 Ok(msg) => hub.dispatch(&msg),
-                Err(err) => tracing::warn!(error = %err, "ignoring malformed event notification"),
+                Err(err) => {
+                    tracing::warn!(failure = ?err.classify(), "ignoring malformed event notification")
+                }
             },
             Err(err) => {
                 // recv() reconnects on the next call; back off a little.
-                tracing::warn!(error = %err, "event listener error; reconnecting");
+                tracing::warn!(
+                    failure = crate::error::database_error_kind(&err),
+                    "event listener error; reconnecting"
+                );
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }

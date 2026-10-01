@@ -91,11 +91,17 @@ struct RefreshRow {
 }
 
 /// The per-request device proof presented with a refresh (protocol 1.5).
-#[derive(Debug)]
 pub struct RefreshProof<'a> {
     pub proof: Option<RequestProof>,
     pub parts: &'a axum::http::request::Parts,
     pub body_hash: [u8; 32],
+}
+
+impl std::fmt::Debug for RefreshProof<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // HTTP Parts can contain Authorization and other credential headers.
+        f.write_str("RefreshProof(<redacted>)")
+    }
 }
 
 fn refresh_failure(reason: &'static str) -> AppError {

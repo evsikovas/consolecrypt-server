@@ -265,3 +265,18 @@ async fn concurrent_upgrades_cannot_exceed_the_cap() {
     assert!(ok <= 2, "{ok} sockets opened with a cap of 2");
     assert!(results.iter().any(|r| r.as_ref().err() == Some(&429)));
 }
+
+#[tokio::test]
+async fn database_failure_closes_event_stream_with_transient_server_error() {
+    let srv = server!(|c| c.ws_session_recheck_interval = std::time::Duration::from_millis(100));
+    let account = srv.new_account().await;
+    let mut ws = ws_connect(&srv, &account.access).await.unwrap();
+    ws_event(&mut ws).await;
+    // Make only this fixture's session lookup fail. Closing its pool would
+    // wait for the separately held LISTEN connection and deadlock the test.
+    sqlx::query("ALTER TABLE sessions RENAME TO unavailable_sessions")
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    assert!(matches!(ws_next(&mut ws).await, WsItem::Closed(Some(1011))));
+}

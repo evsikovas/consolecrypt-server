@@ -153,7 +153,7 @@ pub async fn verify_device_proof(
         .to_array()
         .ok_or_else(|| AppError::bad_request("device_proof.nonce must be 32 bytes"))?;
     let now = Utc::now().timestamp();
-    if (now - proof.issued_at).abs() > limits::MAX_SIGNATURE_SKEW_SECONDS {
+    if now.abs_diff(proof.issued_at) > limits::MAX_SIGNATURE_SKEW_SECONDS as u64 {
         return Err(proof_error("stale"));
     }
     let message = canonical::device_login_message(device_id, proof.issued_at, &nonce);

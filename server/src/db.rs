@@ -41,11 +41,20 @@ pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
         match connect_with(options.clone(), config.database_max_connections).await {
             Ok(pool) => return Ok(pool),
             Err(err) if std::time::Instant::now() + delay < deadline => {
-                tracing::warn!(error = %err, retry_in_ms = delay.as_millis() as u64, "database not reachable yet");
+                tracing::warn!(
+                    failure = crate::error::internal_error_kind(&err),
+                    retry_in_ms = delay.as_millis() as u64,
+                    "database not reachable yet"
+                );
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(Duration::from_secs(5));
             }
-            Err(err) => return Err(err.context("cannot connect to the database")),
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "cannot connect to the database ({})",
+                    crate::error::internal_error_kind(&err)
+                ))
+            }
         }
     }
 }

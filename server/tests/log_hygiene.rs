@@ -325,3 +325,77 @@ async fn secrets_never_reach_the_logs() {
     // Header values never logged.
     assert!(!logs.to_lowercase().contains("bearer cca_"));
 }
+
+struct FailingMailer {
+    marker: String,
+    attempted: Arc<tokio::sync::Notify>,
+}
+impl std::fmt::Debug for FailingMailer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FailingMailer(<redacted>)")
+    }
+}
+impl consolecrypt_server::mail::Mailer for FailingMailer {
+    fn send(
+        &self,
+        _: consolecrypt_server::mail::MailMessage,
+    ) -> futures_util::future::BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async move {
+            self.attempted.notify_one();
+            Err(anyhow::anyhow!(self.marker.clone()))
+        })
+    }
+    fn delivers(&self) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn backend_failures_never_echo_remote_or_database_error_text() {
+    use axum::response::IntoResponse;
+    use consolecrypt_server::{error::AppError, mail};
+    let cap = capture();
+    let marker = format!("sensitive-{}", uuid::Uuid::new_v4());
+    let (parts, _) = axum::http::Request::builder()
+        .header("authorization", &marker)
+        .body(())
+        .unwrap()
+        .into_parts();
+    let proof = consolecrypt_server::auth::sessions::RefreshProof {
+        proof: None,
+        parts: &parts,
+        body_hash: [0; 32],
+    };
+    assert!(!format!("{proof:?}").contains(&marker));
+    let attempted = Arc::new(tokio::sync::Notify::new());
+    mail::send_in_background(
+        Arc::new(FailingMailer {
+            marker: marker.clone(),
+            attempted: attempted.clone(),
+        }),
+        mail::templates::verify_email("test@example.invalid", &marker, None),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(2), attempted.notified())
+        .await
+        .unwrap();
+    assert_eq!(
+        AppError::Db(sqlx::Error::Protocol(marker.clone()))
+            .into_response()
+            .status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(
+        AppError::Internal(anyhow::anyhow!(marker.clone()))
+            .into_response()
+            .status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let logs = cap.0.lock().unwrap();
+    let text = String::from_utf8_lossy(&logs);
+    assert!(text.contains("failed to send mail"));
+    assert!(text.contains("database error"));
+    assert!(
+        !text.contains(&marker),
+        "a synthetic secret reached diagnostic logs"
+    );
+}

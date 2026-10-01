@@ -146,6 +146,12 @@ async fn run(mut socket: WebSocket, state: AppState, auth: AuthContext) {
                     close(&mut socket, CLOSE_REVOKED, "session no longer valid").await;
                     break;
                 }
+                SessionState::Unavailable => {
+                    // Standard transient server failure: reconnect later,
+                    // without treating a database outage as account revocation.
+                    close(&mut socket, 1011, "session validation unavailable").await;
+                    break;
+                }
             },
         }
     }
@@ -158,12 +164,13 @@ enum SessionState {
     /// current (expired or rotated): the client reconnects with its new one.
     TokenExpired,
     Revoked,
+    Unavailable,
 }
 
 /// Periodic safety net in case a revocation notification was lost, and the
 /// bound on how long a (possibly stolen) access token keeps a socket open.
-/// Database errors keep the connection (fail-open only for this hint channel;
-/// every API call re-checks authorization anyway).
+/// Stop delivering metadata when authorization cannot be revalidated.
+/// An unavailable database must not extend a revoked/expired session forever.
 async fn session_state(state: &AppState, auth: &AuthContext) -> SessionState {
     let row: Result<Option<(bool, bool)>, _> = sqlx::query_as(
         "SELECT s.revoked_at IS NULL AND d.revoked_at IS NULL
@@ -183,8 +190,11 @@ async fn session_state(state: &AppState, auth: &AuthContext) -> SessionState {
         Ok(Some((true, false))) => SessionState::TokenExpired,
         Ok(_) => SessionState::Revoked,
         Err(err) => {
-            tracing::warn!(error = %err, "websocket session re-check failed");
-            SessionState::Live
+            tracing::warn!(
+                failure = crate::error::database_error_kind(&err),
+                "websocket session re-check failed"
+            );
+            SessionState::Unavailable
         }
     }
 }

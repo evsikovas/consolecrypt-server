@@ -101,7 +101,7 @@ pub(crate) async fn verify_request_proof<'e>(
     proof: &RequestProof,
 ) -> Result<(), AppError> {
     let now = Utc::now().timestamp();
-    if (now - proof.issued_at).abs() > limits::MAX_REQUEST_PROOF_SKEW_SECONDS {
+    if now.abs_diff(proof.issued_at) > limits::MAX_REQUEST_PROOF_SKEW_SECONDS as u64 {
         return Err(proof_error("stale"));
     }
     let message = canonical::request_proof_message(

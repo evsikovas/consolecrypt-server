@@ -107,12 +107,26 @@ pub fn send_in_background(mailer: Arc<dyn Mailer>, msg: MailMessage) {
     let kind = msg.kind;
     tokio::spawn(async move {
         if let Err(err) = mailer.send(msg).await {
-            // Transport errors can quote the recipient address (PII): the
-            // details go to debug only.
-            tracing::warn!(kind = kind.as_str(), "failed to send mail");
-            tracing::debug!(kind = kind.as_str(), error = %err, "mail failure details");
+            // SMTP responses are remote input and may echo credentials or
+            // recipient data. Log only a bounded local category at every level.
+            tracing::warn!(
+                kind = kind.as_str(),
+                failure = mail_failure_kind(&err),
+                "failed to send mail"
+            );
         }
     });
+}
+
+fn mail_failure_kind(error: &anyhow::Error) -> &'static str {
+    match error.downcast_ref::<lettre::transport::smtp::Error>() {
+        Some(error) if error.is_timeout() => "timeout",
+        Some(error) if error.is_tls() => "tls",
+        Some(error) if error.is_transient() => "smtp_transient",
+        Some(error) if error.is_permanent() => "smtp_permanent",
+        Some(_) => "smtp_transport",
+        None => "mail_internal",
+    }
 }
 
 fn build_message(from: &Mailbox, msg: &MailMessage) -> anyhow::Result<Message> {
