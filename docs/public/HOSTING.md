@@ -250,8 +250,7 @@ python3 server/deploy/docker/verify.py
 Он не проверяет ваш DNS, выдачу публичного сертификата ACME и доставку вашей
 SMTP-почты — эти проверки нужно выполнить для собственной установки.
 
-<a id="kubernetes-helm"></a>
-## Kubernetes / k3s через Helm
+## Kubernetes: Helm
 
 ## 1. Подготовьте окружение и версию
 
