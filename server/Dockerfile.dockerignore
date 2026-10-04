@@ -9,10 +9,6 @@ crates/*
 crates/protocol/*
 !crates/protocol/Cargo.toml
 !crates/protocol/src/
-!crates/models/
-crates/models/*
-!crates/models/Cargo.toml
-!crates/models/src/
 !server/
 server/*
 !server/Cargo.toml

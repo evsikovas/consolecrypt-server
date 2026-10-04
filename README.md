@@ -1,173 +1,324 @@
-<p align="center"><img src="docs/brand/consolecrypt.svg" alt="ConsoleCrypt" width="520"></p>
-<p align="center"><strong>Ваши серверы. Ваши ключи. Ваше рабочее пространство.</strong></p>
-<p align="center">
-<a href="https://consolecrypt.evsikov.net/?lang=ru">Сайт RU</a> ·
-<a href="https://consolecrypt.evsikov.net/?lang=en">Website EN</a> ·
-<a href="https://consolecrypt.evsikov.net/guide">Руководство</a> ·
-<a href="https://consolecrypt.evsikov.net/account">Личный кабинет</a> ·
-<a href="https://git.evsikov.net/publics/consolecrypt/-/releases/v0.3.1">Скачать 0.3.1</a> ·
-<a href="docs/public/BUILD_WINDOWS.md">Собрать для Windows</a> ·
-<a href="docs/public/BUILDING.md">Сборка и свой сервер</a> ·
-<a href="https://git.evsikov.net/publics/consolecrypt/-/issues">Сообщить об ошибке</a>
-</p>
+# ConsoleCrypt Server
 
-ConsoleCrypt — клиент SSH и RDP с терминалом, удалёнными рабочими столами Windows, SFTP, группами хостов, сниппетами и
-ИИ-помощником. В панели сверху — круглый «+» для подключения, широкий поиск по имени или IP хоста и компактный статус синхронизации. Работает с локальным зашифрованным хранилищем; для синхронизации
-между устройствами можно подключить собственный сервер или публичный
-**https://consolecrypt.evsikov.net**. Этот же адрес укажите в настройках сервера
-приложения. Учётные записи на разных серверах независимы.
+Сервер зашифрованной синхронизации и совместного доступа для ConsoleCrypt.
+Помогает пользоваться своим рабочим пространством на нескольких устройствах
+и делиться выбранными данными с коллегами. Содержимое хранилища шифруется
+и расшифровывается клиентом; сервер хранит зашифрованные объекты и управляет
+доступом к ним.
 
-Запуск своего сервера: [Docker Compose](docs/public/HOSTING.md#docker-compose)
-или [Kubernetes / Helm](docs/public/HOSTING.md#kubernetes-helm).
-Сайт и кабинет находятся в отдельном [репозитории consolecrypt-site](https://git.evsikov.net/publics/consolecrypt-site) и выпускаются независимо от API.
+[Клиенты для Windows, macOS, Linux, Android и iOS](https://github.com/evsikovas/consolecrypt-client)
+· [Документация](https://github.com/evsikovas/consolecrypt-docs)
+· [Сайт](https://consolecrypt.evsikov.net)
+· [Установка сервера](docs/public/HOSTING.md)
 
-**Предварительная версия.** Функции продолжают развиваться. Перед обновлением
-сохраняйте зашифрованную резервную копию хранилища и комплект восстановления.
+## Статус переноса
+
+Этот репозиторий выделен из публичного монорепозитория ConsoleCrypt.
+На данном этапе перенесены исходники. Действующие сервер, GitLab CI,
+контейнерный registry, сайт и адреса автообновлений продолжают работать
+на прежней инфраструктуре. Перенос исходников не требует менять адрес сервера
+в установленных клиентах.
+
+Версии компонентов независимы: в текущем `server/Cargo.toml` указана
+**0.1.11**, версия протокола — **1.5**. **0.3.1 — версия клиента**, а не сервера.
+Ветка `main` может содержать изменения после сборки опубликованного образа;
+точную сборку следует определять по Git-коммиту и digest образа.
 
 ## Возможности
 
-- **SSH и терминал:** вкладки, jump-хосты, туннели, поиск и действия с выделенным текстом.
-  Прокрутка при выделении, автоматическое продолжение выделения за краями экрана
-  и счётчик открытых терминалов помогают работать с длинными журналами.
-- **RDP:** удалённые рабочие столы Windows во вкладках, выбор SSH/RDP при добавлении хоста, обмен текстом и доступ к выбранной локальной папке по явному разрешению. [Руководство RDP](docs/public/RDP.md).
-- **Хосты и группы:** карточки или список, поиск, наследование настроек подключения.
-  В глобальном поиске `Ctrl+K` / `⌘K` найдите хост по имени или IP и нажмите Enter
-  для подключения по SSH или RDP с обычной проверкой ключа или сертификата сервера.
-- **SFTP:** передача и просмотр файлов, редактирование во внешнем редакторе на компьютере.
-- **Сниппеты:** свои команды, наборы команд и синхронизация через хранилище.
-- **ИИ-помощник:** Ollama, LM Studio и совместимые с OpenAI API провайдеры; просмотр команд перед выполнением.
-- **Настройка внешнего вида:** светлая и тёмная темы, синий акцент по умолчанию,
-  размер текста, собственные цвета терминала, всплывающая или закреплённая правая панель.
-- **Совместная работа:** выбранные хосты, сниппеты, коллекции и отдельные секреты,
-  проверка устройств, роли и отзыв доступа. Отдельные вкладки показывают полученные и опубликованные объекты; добавление устройств вынесено в собственный блок. [Руководство общего доступа](docs/public/SHARING.md).
-- **Linux:** пакеты DEB/RPM для x86-64, системная ключница Secret Service и выбор внешнего SFTP-редактора. [Установка и сборка](docs/public/BUILD_LINUX.md).
-- **iOS:** предварительный порт с нативным Rust-ядром, SSH/SFTP и Keychain;
-  [сборка Simulator и подпись для телефона](docs/public/BUILD_IOS.md).
-- **Защита данных:** зашифрованное хранилище и резервные копии, автоблокировка,
-  подтверждение новых SSH-ключей хостов и устройств синхронизации.
-- **Android:** интерфейс для телефона, биометрическая разблокировка при доступности
-  и переключатель разрешения скриншотов.
+- **Учётные записи:** регистрация, вход, подтверждение email, смена и сброс
+  пароля, обновление и отзыв сессий. Регистрацию можно закрыть настройкой.
+- **Устройства:** регистрация, подтверждение доверенного устройства,
+  переименование и отзыв. Подписи запросов привязывают сессию к ключу устройства.
+- **Синхронизация:** зашифрованные объекты и конверты ключей, последовательность
+  изменений, push/pull, снимок хранилища, контроль ревизий и конфликтов.
+- **Уведомления:** WebSocket для клиентов; PostgreSQL LISTEN/NOTIFY для обмена
+  событиями между экземплярами API.
+- **Совместный доступ:** выбранные зашифрованные элементы, группы и секреты,
+  история изменений, управление получателями и подтверждённое добавление
+  дополнительных устройств. Возможности включаются отдельными настройками.
+- **Восстановление:** восстановление доступа к аккаунту и хранение зашифрованных
+  конвертов восстановления хранилища. Это разные механизмы: сброс пароля
+  аккаунта сам по себе не расшифровывает хранилище.
+- **Эксплуатация:** SMTP, административная CLI, миграции БД, проверки
+  `/healthz` и `/readyz`, Prometheus, необязательный OpenTelemetry/OTLP,
+  ограничения запросов и объёма данных, очистка устаревших служебных записей.
+- **Развёртывание:** Docker Compose на одном сервере, Helm для Kubernetes
+  или самостоятельный бинарный файл с примером службы systemd.
 
-SSH- и RDP-соединения идут напрямую к вашим серверам. Сервер синхронизации получает
-зашифрованные записи и не располагает ключами для их расшифровки. ИИ-помощник
-опционален: выбранный провайдер получает отправленный вами запрос и разрешённый
-контекст; не включайте в него секреты.
+Сервер не является SSH/RDP-шлюзом. Соединения с удалёнными компьютерами
+и передача файлов по этим соединениям выполняются непосредственно клиентом.
+Для локальной работы клиента сервер синхронизации не требуется.
 
-## Скачать и установить
+## Данные и границы защиты
 
-**Текущий релиз — [0.3.1](https://git.evsikov.net/publics/consolecrypt/-/releases/v0.3.1)** для macOS, Windows, Android и Linux x86-64.
+Сервер не получает ключ расшифрования хранилища и не имеет операции его
+расшифровки. Адреса подключений, пароли подключений, приватные ключи и содержимое
+сниппетов передаются внутри зашифрованных объектов. Восстановить их без
+необходимого клиентского ключа, доверенного устройства или средства
+восстановления оператор не может.
 
-| Платформа | Версия | Скачать | Установка |
-|---|---|---|---|
-| macOS 12+ · Apple Silicon и Intel | **0.3.1+1392** | [DMG](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1392-macos-universal.dmg) | Перенесите ConsoleCrypt в Applications и запускайте оттуда |
-| Windows 10/11 · x64 | **0.3.1+1391** | [EXE](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1391-windows-x64-setup.exe) · [ZIP](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1391-windows-x64-portable.zip) | Запустите установщик без прав администратора или распакуйте ZIP целиком |
-| Android 11+ · ARM64 | **0.3.1+1393** | [APK](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1393-android-arm64.apk) | Скачайте APK на телефон и установите |
-| Linux x86-64 · Ubuntu 22.04 / Debian 12 | **0.3.1+1390** | [DEB](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1390-linux-x64.deb) | Установите через `apt`; нужна разблокированная ключница Secret Service |
-| Linux x86-64 · Fedora 43 | **0.3.1+1390** | [RPM](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1390-linux-x64.rpm) | Установите через `dnf`; нужна разблокированная ключница Secret Service |
+При этом сервер видит **метаданные**: адрес аккаунта, сведения об устройствах,
+идентификаторы, размеры объектов, ревизии, время обращений и сведения,
+необходимые для контроля доступа. Пароль аккаунта при аутентификации передаётся
+по HTTPS и проверяется сервером; в БД хранится его Argon2id-хеш.
+Пароль аккаунта не следует путать с секретами внутри хранилища.
 
-iOS Simulator на Mac: **0.3.1+1389**, [ZIP, часть 1](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1389-ios-simulator-universal.zip.001) · [часть 2](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/ConsoleCrypt-0.3.1%2B1389-ios-simulator-universal.zip.002) · [инструкция](docs/public/BUILD_IOS.md). Для настоящего iPhone нужна отдельная подпись; ZIP на телефон не устанавливается.
+Подписи запросов обязательны по умолчанию. Подтверждение устройства и проверка
+получателя в клиенте остаются важной частью защиты совместного доступа.
+Отзыв доступа ограничивает последующие обращения к API, но не удаляет данные,
+которые получатель уже успел расшифровать или скопировать. Шифрование также
+не заменяет резервные копии и не гарантирует доступность при отказе сервера.
 
-[Контрольные суммы SHA-256 для всех пакетов](https://git.evsikov.net/api/v4/projects/14/packages/generic/consolecrypt/0.3.1/SHA256SUMS-0.3.1.txt) ·
-[Проверки выпуска 0.3.1](docs/public/RELEASE_0_3_1.md) · [Как работают обновления](docs/public/UPDATES.md).
+Сообщения об уязвимостях: [SECURITY.md](SECURITY.md).
 
-На Windows, macOS и Android в настройках есть автопроверка при запуске, ручная проверка и скачивание новой версии с проверкой подписи списка релизов. На Linux скачайте новый DEB/RPM и обновите приложение через менеджер пакетов; автоматической установки и подписанной ленты обновлений Linux в этом выпуске нет. Для перехода с 0.1.10 или более ранней версии установите этот релиз вручную. На macOS при переходе со старой кнопки обновления скачайте DMG через браузер и один раз замените приложение в Applications. Это нужно и для любой новой копии, если она была скачана старым приложением и не открывается: повторное скачивание старой кнопкой может снова перенести тот же запрет запуска. Начиная с 0.2.2 следующие обновления сохраняются через системный диалог «Сохранить и открыть», чтобы macOS разрешала запуск новой копии. Профили и хранилища сохраняются.
+## Структура
 
-Номер после `+` увеличивается при каждой сборке, поэтому он различается между
-платформами. Бинарные файлы публикуются через GitLab Releases и не хранятся в Git.
+```text
+server/                    самостоятельный Rust workspace сервера
+  src/                     HTTP API, авторизация, синхронизация, sharing, SMTP
+  migrations/              SQL-миграции PostgreSQL, встроенные в бинарный файл
+  tests/                   интеграционные тесты с настоящей PostgreSQL
+  deploy/docker/           Compose, Caddy и генератор приватной конфигурации
+  deploy/native/           JSON-конфигурация и пример systemd
+  helm/                    Helm chart
+  Dockerfile               сборка образа из корня репозитория
+crates/
+  Cargo.toml               отдельный workspace протокола
+  protocol/                cc-protocol: DTO, идентификаторы и wire-контракт
+docs/public/               инструкции по размещению и лицензии
+rust-toolchain.toml        закреплённый Rust toolchain
+```
 
-На Windows программа устанавливается в `%LOCALAPPDATA%\Programs\ConsoleCrypt`.
-Хранилища находятся в `%LOCALAPPDATA%\consolecrypt\ConsoleCrypt\data` и сохраняются
-при обновлении и удалении приложения.
+`cc-protocol` используется клиентом и сервером. Он расположен рядом с сервером,
+но не зависит от серверного runtime. Сервер зависит только от этого общего
+crate; клиентские модели `cc-models` и код интерфейса сюда не входят.
 
-macOS-сборки пока без нотариализации Apple, APK использует тестовую подпись,
-Windows-установщик без цифровой подписи издателя. Это пакеты для предварительного
-тестирования, не публикация в App Store, Google Play или Microsoft Store.
+## Сборка из исходников
 
-## Первое подключение
+Понадобятся Git, Rust через rustup и системный C/C++ linker. На Linux установите
+средства сборки вашего дистрибутива, на macOS — Command Line Tools,
+на Windows — Visual Studio Build Tools с C++ workload.
+Точная версия Rust задана в [rust-toolchain.toml](rust-toolchain.toml)
+(сейчас `1.98`); rustup выбирает её автоматически. PostgreSQL для компиляции
+не нужна, но требуется для запуска и интеграционных тестов.
 
-1. Откройте приложение и выберите локальный профиль либо подключение к своему серверу синхронизации.
-2. Создайте хранилище, задайте парольную фразу и сохраните комплект восстановления в надёжном месте.
-3. В разделе **Учётные данные** добавьте способ SSH-аутентификации.
-4. В **Хостах** нажмите **Новый хост**, укажите адрес, имя пользователя, порт и учётные данные.
-5. Нажмите карточку хоста или значок терминала. При первом подключении сверьте отпечаток SSH-ключа с администратором сервера.
-
-В левой панели оставлен раздел **Хосты**: группы, вложенные группы и их настройки доступны внутри него. В меню хоста можно открыть SFTP, изменить хост или перенести его в группу.
-
-Встроенный SSH запрашивает UTF-8 для ввода кириллицы и корректного удаления символов. После обновления откройте новую SSH-сессию. Если сервер запрещает запросы окружения, не поддерживает `C.UTF-8` или принудительно задаёт `LC_ALL=C`, администратору нужно настроить UTF-8 на сервере. Явно выбранный системный OpenSSH backend не изменён.
-Сниппеты и ИИ доступны в правой панели на компьютере и через мобильную навигацию
-на телефоне. После работы с панелью одного клика по терминалу достаточно для
-продолжения ввода. Длинный вывод можно прокручивать колесом или трекпадом, сохраняя
-выделение; удерживайте левую кнопку мыши за верхним или нижним краем терминала,
-чтобы продолжить выделение в буфере прокрутки. Параметры редактора, интерфейса и терминала находятся в настройках.
-
-Пароль учётной записи, парольная фраза хранилища и пароль системной связки ключей
-macOS — разные вещи. После обновления неподписанной сборки macOS может заново
-запросить доступ к связке ключей. Не удаляйте системную связку ключей для устранения
-такого запроса. Биометрия не заменяет сохранённую парольную фразу и комплект восстановления.
-
-## Собрать из исходников
-
-Для чтения публичного репозитория SSH-ключ не нужен:
+Из корня репозитория:
 
 ```sh
-git clone https://git.evsikov.net/publics/consolecrypt.git
-cd consolecrypt
+git clone https://github.com/evsikovas/consolecrypt-server.git
+cd consolecrypt-server
+cargo build --locked --release --manifest-path server/Cargo.toml
+server/target/release/consolecrypt-server --help
 ```
 
-Для работы по SSH:
+На Windows исполняемый файл имеет расширение `.exe`.
+Сервер использует свой `Cargo.lock`, протокол — `crates/Cargo.lock`.
+`--locked` сохраняет закреплённые версии зависимостей.
+
+Образ собирается **из корня репозитория**, поскольку ему нужны и `server/`,
+и `crates/protocol/`:
 
 ```sh
-git clone ssh://git@git.evsikov.net:2222/publics/consolecrypt.git
+docker build -f server/Dockerfile -t consolecrypt-server:local .
 ```
 
-На Windows после установки инструментов из [пошаговой инструкции](docs/public/BUILD_WINDOWS.md):
+Runtime образа — distroless с непривилегированным пользователем. Проверка
+готовности встроена в бинарный файл: устанавливать shell или curl в образ
+не требуется. Для распространяемого изменённого образа задайте build argument
+`SOURCE_URL` со ссылкой на соответствующие исходники; во время запуска эту
+ссылку можно задать через `CC_SOURCE_CODE_URL`.
 
-```powershell
-.\client\scripts\build-windows.ps1 -Installer -NoCli
+## Проверки и тесты
+
+Проверки без базы:
+
+```sh
+cargo fmt --manifest-path server/Cargo.toml --all -- --check
+cargo fmt --manifest-path crates/Cargo.toml --all -- --check
+cargo test --locked --manifest-path crates/Cargo.toml -p cc-protocol
+cargo test --locked --manifest-path server/Cargo.toml --lib
 ```
 
-Готовый установщик, ZIP и SHA-256 появятся в `dist/windows/`.
-[Сборка macOS/Android/Linux и запуск своего сервера →](docs/public/BUILDING.md)
+Для полного набора используйте **отдельную PostgreSQL 16 для тестов**.
+Роль из `CC_TEST_DATABASE_URL` должна уметь создавать базы: каждый тест создаёт
+свою временную БД и удаляет её после работы. Рабочую БД сервера и её реквизиты
+для этого не используйте.
 
-## Состав проекта
+Пример в Bash: введите URL тестовой БД скрыто, чтобы он не оказался в истории
+команд. В формате URL специальные символы пароля должны быть URL-encoded.
 
-| Каталог | Содержимое |
+```bash
+read -r -s -p 'URL отдельной тестовой PostgreSQL: ' CC_TEST_DATABASE_URL
+printf '\n'
+export CC_TEST_DATABASE_URL
+export CC_TEST_REQUIRE_DB=1
+cargo test --locked --manifest-path server/Cargo.toml
+unset CC_TEST_DATABASE_URL CC_TEST_REQUIRE_DB
+```
+
+**Без `CC_TEST_DATABASE_URL` тесты с БД пропускаются.** Переменная
+`CC_TEST_REQUIRE_DB=1` превращает отсутствие настройки в ошибку; используйте
+её в полной проверке и CI. Не считайте запуск без БД полной проверкой сервера.
+
+В [server/deploy/docker/verify.py](server/deploy/docker/verify.py) есть отдельный
+smoke-тест Docker-комплекта: API, HTTPS с временным локальным CA,
+backup/restore и сохранность данных после перезапуска. Он требует Docker
+и создаёт собственный временный Compose-проект. Доставку вашей SMTP-почты,
+публичный DNS и выдачу публичного сертификата нужно проверять отдельно.
+
+## Запуск через Docker Compose
+
+Полная инструкция, включая обновление, резервные копии и Helm:
+[HOSTING.md](docs/public/HOSTING.md). Ниже — первый запуск на одном Linux-сервере.
+
+Нужны Docker Engine, Docker Compose **2.24.4 или новее**, Python **3.9 или новее**,
+DNS-имя вашего сервера и свободные входящие TCP-порты 80/443 для Caddy.
+DNS A/AAAA должны вести на этот сервер. Для HTTP/3 также используется UDP 443.
+
+Готовый Compose пока закреплён за опубликованным серверным образом **0.1.11**
+в прежнем registry. Он не пересобирает текущую ветку GitHub. Это сохраняет
+прежнюю схему поставки до отдельного перехода инфраструктуры.
+
+Из корня репозитория создайте конфигурацию вне исходников:
+
+```sh
+python3 server/deploy/docker/init-config.py \
+  --directory "$HOME/.config/consolecrypt-server" \
+  --domain sync.example.org
+```
+
+Замените `sync.example.org` своим доменом. Генератор создаёт каталог с правами
+`0700`, файл `server.env` с правами `0600`, разные случайные пароли PostgreSQL
+для администратора и приложения, а SMTP-пароль спрашивает скрыто.
+Существующий файл он не перезаписывает.
+
+Затем в том же терминале:
+
+```sh
+cc_compose() {
+  docker compose --env-file "$HOME/.config/consolecrypt-server/server.env" \
+    -f server/deploy/docker/compose.yaml --profile https "$@"
+}
+
+cc_compose config --quiet
+cc_compose pull
+cc_compose up -d --wait --wait-timeout 180
+cc_compose ps
+
+curl --fail --silent --show-error https://sync.example.org/readyz
+curl --fail --silent --show-error https://sync.example.org/v1/meta
+```
+
+В клиенте создайте профиль с `https://sync.example.org`, **без `/v1`**.
+PostgreSQL не публикует порт на хост, API доступен на `127.0.0.1:8080`,
+внешние HTTPS и WebSocket обслуживает Caddy. Этот комплект поднимает API,
+PostgreSQL и proxy; сайт, личный кабинет и аналитика устанавливаются отдельно.
+Если уже есть свой HTTPS proxy, следуйте соответствующему разделу HOSTING.md
+и не включайте профиль `https`.
+
+`server/docker-compose.yml` — другой, разработческий пример с пересборкой
+исходников и файловой доставкой почты. Для публичной установки используйте
+`server/deploy/docker/compose.yaml`.
+
+## SMTP и приватная конфигурация
+
+| Переменная | Назначение |
 |---|---|
-| `client/flutter` | Интерфейс, нативные оболочки и ресурсы |
-| `client/rust` | Криптография, SSH/SFTP, хранилище, синхронизация и bridge |
-| `crates` | Общие модели и протокол клиента и сервера |
-| `server` | Сервер синхронизации, миграции PostgreSQL, Docker и Helm |
-| `client/scripts`, `client/packaging` | Сборка и упаковка приложений |
+| `CC_MAIL_TRANSPORT` | `smtp`, `file` для разработки или `disabled` |
+| `CC_MAIL_FROM` | Разрешённый почтовым сервисом отправитель |
+| `CC_SMTP_HOST` | Имя SMTP-сервера |
+| `CC_SMTP_PORT` | Обычно 587 для STARTTLS или 465 для TLS |
+| `CC_SMTP_TLS` | `starttls` или `tls`; `none` только для локального relay |
+| `CC_SMTP_USERNAME` / `CC_SMTP_PASSWORD` | Реквизиты SMTP, если relay требует входа |
+| `CC_DATABASE_PASSWORD` | Пароль БД отдельно от `CC_DATABASE_URL` |
 
-Зависимости загружаются при сборке; lock-файлы включены в репозиторий.
-Дистрибутивы и история релизов — в GitLab Releases.
-[Как выпускать новую версию →](docs/public/RELEASING.md)
+Значения задаются в приватном `server.env`, а не в Dockerfile, исходниках,
+клиенте или сайте. Для изменения SMTP отредактируйте файл и выполните
+`cc_compose up -d --force-recreate server`: новый образ не требуется.
 
-## English
+Не выполняйте `source server.env`: это файл Compose, а не shell-скрипт.
+Не публикуйте вывод `docker compose config` без `--quiet` или `docker inspect`:
+он может содержать реквизиты. Переменные shell имеют приоритет над `--env-file`,
+поэтому настройку удобнее выполнять в чистом терминале без `set -x`.
+Доступ к Docker daemon позволяет читать окружение контейнеров.
+Сервер не поддерживает переменные `*_FILE`.
 
-ConsoleCrypt is an SSH/RDP workspace with host groups, snippets, an optional AI
-assistant and encrypted sync/team sharing. Version **0.3.1** improves page spacing and adds saved SSH/RDP host selection
-to the global connection button. Windows remote desktops include native fullscreen
-controls, explicit text clipboard and selected-folder access. Downloads and exact platform build numbers are in the table above; [Linux installation](docs/public/BUILD_LINUX.md) explains `apt`/`dnf` and
-the required existing unlocked persistent Secret Service keyring.
-Linux updates are manual package-manager updates. Signed in-app update metadata
-is supported on Windows, macOS and Android, not Linux or iOS.
+Для закрытой установки без SMTP у генератора есть `--mail-disabled`.
+Подтверждение email в этом Compose остаётся обязательным: после проверки
+владельца адреса оператор выполняет:
 
-The iOS **0.3.1+1389** ZIP parts are for Simulator on Mac, not an iPhone IPA.
-macOS is not Apple-notarized, Windows installers do not carry an issuer signature,
-and Android retains its preview signer.
-See [release checks and limits](docs/public/RELEASE_0_3_1.md).
+```sh
+cc_compose exec -T server /usr/local/bin/consolecrypt-server \
+  admin verify-email --email user@example.org
+```
 
-If an old macOS in-app downloader produced an app that cannot launch, download
-the DMG once through your browser, quit ConsoleCrypt, replace it in Applications,
-and open that copy. Keep your profiles, vaults and Keychain. Subsequent updates
-use the system **Save and open** dialog; security protections stay enabled.
+Автоматического сброса пароля по почте без SMTP не будет. `CC_PUBLIC_URL`
+в примере пуст: письма содержат код без ссылки на неустановленный веб-кабинет.
 
-## Автор и лицензии
+## Включение совместного доступа
 
-**Alexander Evsikov** · [i@evsikov.net](mailto:i@evsikov.net)
+По умолчанию выключены:
 
-Клиент, сервер, общие библиотеки и документация ConsoleCrypt:
-[GNU AGPL-3.0-only](LICENSE). [Подробности лицензирования →](docs/public/LICENSING.md)
-Сторонние компоненты сохраняют свои лицензии.
-Уязвимости: [порядок сообщения](SECURITY.md).
+```dotenv
+CC_OBJECT_SHARING_ENABLED=false
+CC_SHARED_GROUPS_ENABLED=false
+CC_SHARED_SECRETS_ENABLED=false
+CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED=false
+```
+
+После проверки совместимости клиентов оператор может включить нужные
+возможности в приватном `server.env` и пересоздать сервис `server`.
+Для расширений нужен основной `CC_OBJECT_SHARING_ENABLED=true`.
+Для всех вариантов обязателен `CC_REQUIRE_REQUEST_PROOF=true`.
+Включение функций не публикует хранилища: пользователь отдельно выбирает,
+чем и с кем поделиться. Поддержка проверяется авторизованным запросом
+`/v1/shares/capabilities`, а не через `/v1/meta`.
+
+## Бинарный файл без Docker
+
+Текущие исходники поддерживают `CC_*` окружение и приватный JSON-файл:
+
+```sh
+server/target/release/consolecrypt-server \
+  --config /etc/consolecrypt/server.json serve
+```
+
+Подготовьте JSON по
+[примеру](server/deploy/native/server.example.json) и
+[инструкции для native/systemd](server/deploy/native/README.md).
+На Unix файл должен иметь права `0600` или `0400`; переменные окружения
+имеют приоритет над его значениями. Конфигурация не исполняется как скрипт.
+
+Команды `migrate`, `healthcheck` и `admin` используют ту же конфигурацию.
+Системный пользователь, роль PostgreSQL с правами владельца отдельной БД
+и внешний HTTPS proxy настраиваются оператором.
+Закреплённый ранее опубликованный Docker-образ 0.1.11 ещё не содержит
+поддержку `--config`: его Compose использует окружение `server.env`.
+
+## Обновления и резервные копии
+
+Постоянные данные находятся в PostgreSQL volume. Храните резервные копии
+базы и приватной конфигурации вне этого сервера и проверяйте восстановление.
+Бэкап содержит чувствительные метаданные аккаунтов, даже когда содержимое
+хранилищ зашифровано.
+
+Перед обновлением сохраните прежний digest образа, конфигурацию и проверенный
+бэкап. Миграции встроены в сервер; возврат старого образа не откатывает схему БД.
+Не используйте `docker compose down -v` для обновления и не меняйте имя
+Compose-проекта или пароли существующей БД как способ переустановки.
+Пошаговые команды backup/restore и обновления приведены в
+[HOSTING.md](docs/public/HOSTING.md).
+
+## Лицензия
+
+Текущие исходники сервера и протокола распространяются под
+[GNU AGPL v3](LICENSE), SPDX `AGPL-3.0-only`.
+Сторонние компоненты сохраняют собственные лицензии и уведомления.
+Ранее опубликованные версии сохраняют условия, с которыми были выпущены.
+
+Ссылка `source_code_url` в `/v1/meta` помогает пользователям получить
+соответствующие исходники; оператор изменённой сборки задаёт её через
+`CC_SOURCE_CODE_URL`. Подробнее: [LICENSING.md](docs/public/LICENSING.md).
+
+Автор: Alexander Evsikov · [i@evsikov.net](mailto:i@evsikov.net).

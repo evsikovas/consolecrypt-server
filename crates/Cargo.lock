@@ -40,19 +40,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cc-models"
-version = "0.1.0"
-dependencies = [
- "cc-protocol",
- "chrono",
- "serde",
- "serde_json",
- "thiserror",
- "uuid",
- "zeroize",
-]
-
-[[package]]
 name = "cc-protocol"
 version = "0.1.0"
 dependencies = [
@@ -456,26 +443,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "zeroize"
-version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
-dependencies = [
- "zeroize_derive",
-]
-
-[[package]]
-name = "zeroize_derive"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
