@@ -1,0 +1,188 @@
+name: Server
+
+on:
+  push:
+    branches: [main]
+    tags: ['server-v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/evsikovas/consolecrypt-server
+
+jobs:
+  validate:
+    name: Rust and PostgreSQL tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        # Disposable CI database, reachable only on this hosted runner's loopback.
+        # No production credentials or fixed test passwords are needed.
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install the repository toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: |
+            crates
+            server
+      - name: Formatting and lint
+        run: |
+          cargo fmt --manifest-path crates/Cargo.toml --all -- --check
+          cargo fmt --manifest-path server/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path server/Cargo.toml --all-targets -- -D warnings
+      - name: Protocol tests
+        run: cargo test --locked --manifest-path crates/Cargo.toml
+      - name: Publication guards
+        run: python3 -m unittest discover -s server/scripts -p 'test_publish*.py' -v
+      - name: Server, native configuration, sharing and backup/restore tests
+        env:
+          CC_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
+          CC_TEST_REQUIRE_DB: '1'
+          CC_TEST_PG_TOOLS: docker exec -i ${{ job.services.postgres.id }}
+          CC_TEST_PG_USER: postgres
+        run: cargo test --locked --manifest-path server/Cargo.toml --all-targets -- --test-threads=4
+
+  images:
+    name: Build and verify ${{ matrix.arch }} image
+    needs: validate
+    # External PRs never receive package credentials or run on personal runners.
+    if: >-
+      github.repository == 'evsikovas/consolecrypt-server' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/server-v'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Read and validate image metadata
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('server/Cargo.toml').read_text())['package']['version']
+          assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'A stable server version is required'
+          ref = os.environ['GITHUB_REF']
+          if ref.startswith('refs/tags/'):
+              assert ref == f'refs/tags/server-v{version}', 'Tag must match server/Cargo.toml'
+          sha = os.environ['GITHUB_SHA']
+          values = {
+              'SERVER_VERSION': version,
+              'IMAGE_TAG': f'{version}-{sha[:12]}-{os.environ["ARCH"]}',
+              'SOURCE_URL': f'https://github.com/{os.environ["GITHUB_REPOSITORY"]}/tree/{sha}',
+          }
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.writelines(f'{key}={value}\n' for key, value in values.items())
+          PY
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the native image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          build-args: |
+            SERVER_VERSION=${{ env.SERVER_VERSION }}
+            SOURCE_REVISION=${{ github.sha }}
+            SOURCE_URL=${{ env.SOURCE_URL }}
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
+      - name: Verify the exact image before publishing
+        run: |
+          docker run --rm --network none "$IMAGE:$IMAGE_TAG" --version
+          docker pull postgres:16-alpine
+          docker pull caddy:2-alpine
+          python3 server/deploy/docker/verify.py \
+            --image "$IMAGE:$IMAGE_TAG" \
+            --server-version "$SERVER_VERSION" \
+            --source-code-url "$SOURCE_URL"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the verified image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker push "$IMAGE:$IMAGE_TAG"
+          mkdir -p dist/digests
+          docker image inspect "$IMAGE:$IMAGE_TAG" \
+            --format '{{index .RepoDigests 0}}' > "dist/digests/$ARCH"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: server-digest-${{ matrix.arch }}
+          path: dist/digests/*
+          retention-days: 30
+          if-no-files-found: error
+
+  manifest:
+    name: Publish the multi-platform manifest
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: server-digest-*
+          path: dist/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create manifest and release references
+        run: |
+          python3 server/scripts/publish_github_manifest.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: server-image
+          path: dist/server-image.json
+          retention-days: 90
+          if-no-files-found: error

@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM ${RUNTIME_IMAGE}
 ARG SOURCE_REVISION=unknown
 ARG SERVER_VERSION=unknown
-ARG SOURCE_URL=https://git.evsikov.net/publics/consolecrypt
+ARG SOURCE_URL=https://github.com/evsikovas/consolecrypt-server
 LABEL org.opencontainers.image.revision="${SOURCE_REVISION}" \
       org.opencontainers.image.version="${SERVER_VERSION}" \
       org.opencontainers.image.title="consolecrypt-server" \
@@ -37,7 +37,9 @@ LABEL org.opencontainers.image.revision="${SOURCE_REVISION}" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.authors="Alexander Evsikov <i@evsikov.net>" \
       org.opencontainers.image.vendor="Alexander Evsikov" \
-      org.opencontainers.image.source="https://git.evsikov.net/publics/consolecrypt"
+      org.opencontainers.image.source="https://github.com/evsikovas/consolecrypt-server" \
+      org.opencontainers.image.url="https://consolecrypt.dev" \
+      org.opencontainers.image.documentation="https://github.com/evsikovas/consolecrypt-docs"
 COPY --from=build /consolecrypt-server /usr/local/bin/consolecrypt-server
 USER 65532:65532
 ENV CC_SOURCE_CODE_URL=${SOURCE_URL} \

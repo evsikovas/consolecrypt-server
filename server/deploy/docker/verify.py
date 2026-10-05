@@ -9,6 +9,7 @@ Removes only its own Compose project, test volumes and private temporary files.
 No secrets, full environment, SQL dump or container logs are printed.
 """
 
+import argparse
 import importlib.util
 import json
 import os
@@ -32,6 +33,14 @@ def main():
     spec = importlib.util.spec_from_file_location("init_config", directory / "init-config.py")
     config = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(config)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--image", default=config.IMAGE,
+                        help="Exact local/registry image to verify before publishing")
+    parser.add_argument("--server-version", default="0.1.11")
+    parser.add_argument("--source-code-url", default=config.SOURCE)
+    args = parser.parse_args()
+    config.IMAGE = args.image
+    config.SOURCE = args.source_code_url
     project = "cc-compose-test-" + uuid.uuid4().hex[:12]
     env = {key: value for key, value in os.environ.items() if not key.startswith("CC_")}
     checks = []
@@ -115,7 +124,7 @@ def main():
             assert request(origin, "/healthz").strip() == b"ok"
             assert request(origin, "/readyz").strip() == b"ready"
             meta = json.loads(request(origin, "/v1/meta"))
-            assert meta["server_version"] == "0.1.11"
+            assert meta["server_version"] == args.server_version
             assert meta["protocol_version"] == "1.5"
             assert meta["source_code_url"] == config.SOURCE
             assert meta["email_verification_required"] is True
