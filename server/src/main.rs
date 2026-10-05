@@ -18,7 +18,9 @@ use consolecrypt_server::{
     long_version = concat!(
         env!("CARGO_PKG_VERSION"),
         "\nAuthor: Alexander Evsikov <i@evsikov.net>",
-        "\nLicense: AGPL-3.0-only (source: https://github.com/consolecrypt/consolecrypt)"
+        "\nLicense: AGPL-3.0-only (source: ",
+        env!("CARGO_PKG_REPOSITORY"),
+        ")"
     ),
     after_help = "Author: Alexander Evsikov <i@evsikov.net> · License: AGPL-3.0-only",
     about = "ConsoleCrypt zero-knowledge sync server (AGPL-3.0-only)",
