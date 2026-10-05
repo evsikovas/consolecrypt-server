@@ -7,11 +7,15 @@
 
 ## Проверить поддержку сервера
 
-В публичном сервере `https://consolecrypt.evsikov.net` доступны выбранные хосты,
+Для новых профилей используйте публичный сервер `https://sync.consolecrypt.dev`.
+На нём доступны выбранные хосты,
 сниппеты, общие коллекции, отдельные секреты и подтверждённое добавление собственных
 устройств. В своём сервере администратор включает эти возможности отдельно:
 [настройки Docker Compose и Helm](HOSTING.md). Включение функции не публикует
 личные данные: отправка выбранного элемента требует явного действия владельца.
+
+Существующие профили с адресом `https://consolecrypt.evsikov.net` продолжают
+работать; менять адрес сервера в них не требуется.
 
 В клиенте **0.2.0 и новее** нажмите **Совместный доступ → Обновить общие данные**,
 чтобы повторно проверить возможности сервера после их включения или сетевой
@@ -117,12 +121,16 @@ offers **Add this device**, **Confirm another device** and **Device requests**.
 verification. **My device verification code** remains available in the page header.
 Switching tabs or importing a packet does not grant access by itself.
 
-The public server at `https://consolecrypt.evsikov.net` enables selective sharing,
+For new profiles, use the public server at `https://sync.consolecrypt.dev`.
+It enables selective sharing,
 collections, individual secrets and verified enrollment of additional devices.
 Enabling support does not publish personal items automatically. In client **0.2.0
 and later**, use **Sharing → Refresh shared data** after support is enabled or a
 connection fails. Connection and authentication errors are shown separately from
 unavailable support. Upgrade an older client if its refresh button stays disabled.
+
+Existing profiles using `https://consolecrypt.evsikov.net` continue to work;
+you do not need to change their server URL.
 
 Share selected hosts, snippets, collections or individual secrets with verified
 devices on the same compatible server. Compare the entire device code over an
