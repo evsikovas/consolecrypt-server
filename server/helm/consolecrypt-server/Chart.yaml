@@ -8,13 +8,13 @@ description: >-
   decrypt vault data and SSH traffic never goes through it.
 type: application
 # Chart version (SemVer). Bump on every chart change.
-version: 0.1.13
+version: 0.1.14
 # Version of consolecrypt-server this chart deploys by default (image tag).
-appVersion: "0.1.11"
+appVersion: "0.1.12"
 kubeVersion: ">=1.25.0-0"
-home: https://git.evsikov.net/publics/consolecrypt
+home: https://github.com/evsikovas/consolecrypt-server
 sources:
-  - https://git.evsikov.net/publics/consolecrypt
+  - https://github.com/evsikovas/consolecrypt-server
 keywords:
   - consolecrypt
   - ssh
@@ -24,7 +24,7 @@ keywords:
 maintainers:
   - name: Alexander Evsikov
     email: i@evsikov.net
-    url: https://git.evsikov.net/publics/consolecrypt
+    url: https://github.com/evsikovas/consolecrypt-server
 annotations:
   # The chart is part of server/** and shares its license (ADR-0005).
   licenses: AGPL-3.0-only

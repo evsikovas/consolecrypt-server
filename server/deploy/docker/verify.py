@@ -36,7 +36,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default=config.IMAGE,
                         help="Exact local/registry image to verify before publishing")
-    parser.add_argument("--server-version", default="0.1.11")
+    parser.add_argument("--server-version", default="0.1.12")
     parser.add_argument("--source-code-url", default=config.SOURCE)
     args = parser.parse_args()
     config.IMAGE = args.image

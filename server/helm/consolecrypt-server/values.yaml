@@ -23,11 +23,12 @@ replicaCount: 1
 image:
   # -- API-only image; the product website is distributed separately.
   # Releases publish linux/amd64 and linux/arm64. Prefer image.digest for deployments.
-  repository: registry.evsikov.net/publics/consolecrypt/server
+  repository: ghcr.io/evsikovas/consolecrypt-server
   # -- Image tag; defaults to the chart appVersion.
   tag: ""
-  # -- Optional image digest (e.g. "sha256:…"); takes precedence over the tag.
-  digest: ""
+  # -- Immutable verified release; takes precedence over tag/appVersion.
+  # To choose a different tag, explicitly clear digest or set its matching digest.
+  digest: "sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978"
   pullPolicy: IfNotPresent
 
 # -- Pull secrets for private registries, e.g. [{name: regcred}].
@@ -240,7 +241,7 @@ config:
   publicUrl: ""
   # -- AGPL-3.0 §13 source offer returned by GET /v1/meta (CC_SOURCE_CODE_URL).
   # If you run a MODIFIED server, point this at the source of your version.
-  sourceCodeUrl: https://github.com/consolecrypt/consolecrypt
+  sourceCodeUrl: https://github.com/evsikovas/consolecrypt-server/tree/4dd3809cf5834ab2200f11462c54e868318c1b35
   # -- Allow new account registration (CC_REGISTRATION_OPEN).
   registrationOpen: true
   # -- Require a verified email before creating vaults

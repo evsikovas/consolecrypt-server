@@ -13,8 +13,8 @@ import secrets
 import sys
 import warnings
 
-IMAGE = "registry.evsikov.net/publics/consolecrypt/server@sha256:580aadd6bad228a9d6506a6dd2b83de9b7d22ec9502c28daeb4aabf9f37d06b2"
-SOURCE = "https://git.evsikov.net/publics/consolecrypt/-/tree/8d2213f5bc24bd94a4eac6ee85f132ac3bd5600a"
+IMAGE = "ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978"
+SOURCE = "https://github.com/evsikovas/consolecrypt-server/tree/4dd3809cf5834ab2200f11462c54e868318c1b35"
 
 
 def quote(value):
