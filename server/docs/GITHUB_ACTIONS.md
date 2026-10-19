@@ -59,7 +59,7 @@ ghcr.io/evsikovas/consolecrypt-server:<version>
 ## Порядок выпуска
 
 1. Проверить и включить изменения в `main`, поднять `server/Cargo.toml` и запись
-   самого сервера в `server/Cargo.lock` (следующий выпуск — `0.1.13`).
+   самого сервера в `server/Cargo.lock` (пример ниже — `0.1.13`).
 2. После локальной проверки `main` создать и отправить тег на выбранном коммите:
 
    ```sh
@@ -151,3 +151,22 @@ python3 release-compose.py --config /etc/consolecrypt/server-release.json --roll
 не передаётся на VPS, не попадает в command line/payload и удаляется с runner
 после шага. Производственная выкладка сериализована, running deploy не отменяется.
 Само наличие домашнего k3s runner не даёт ему роли production target.
+
+Для production используйте отдельный SSH-ключ с принудительным обработчиком
+[release-receiver.py](../deploy/release-receiver.py). Установите его как
+`/opt/consolecrypt/releases/server/receive.py`; рядом положите проверенный
+`release-compose.py` и приватный `server.json` с конфигурацией существующего API.
+Каталог принадлежит администратору и имеет режим `700`, файлы — `600`.
+В `authorized_keys` ограничьте этот ключ:
+
+```text
+restrict,command="/usr/bin/python3 /opt/consolecrypt/releases/server/receive.py" ssh-ed25519 PUBLIC_KEY
+```
+
+Обработчик ограничивает размер запроса, проверяет тег, исходный commit и digest
+именно `consolecrypt-server`; использует только установленные администратором
+script/config и игнорирует команду SSH и присланный код. Этот ключ не выполняет
+произвольные команды и не выбирает другой Compose-сервис. Публичный образ
+сервера скачивается без registry-пароля. Невалидный запрос должен завершаться
+отказом до запуска Docker; работоспособность обычного административного SSH
+проверяется отдельно. Для обновления самого обработчика нужен доступ администратора.
