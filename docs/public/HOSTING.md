@@ -191,9 +191,9 @@ cc_compose exec -T postgres pg_restore --list \
 выберите другое имя и используйте его в обеих командах:
 
 ```sh
-cc_compose exec -T postgres createdb -U postgres -O consolecrypt consolecrypt_restore_check
-cc_compose exec -T postgres pg_restore -U postgres --role=consolecrypt \
-  -d consolecrypt_restore_check --exit-on-error --no-owner --no-acl < "$CC_BACKUP_FILE"
+cc_compose exec -T postgres createdb -U postgres -O consolecrypt consolecrypt_restore_check &&
+  cc_compose exec -T postgres pg_restore -U postgres --role=consolecrypt \
+    -d consolecrypt_restore_check --exit-on-error --no-owner --no-acl < "$CC_BACKUP_FILE"
 ```
 
 Сверьте таблицы, миграции, число записей и `sharing_instance.instance_id`,

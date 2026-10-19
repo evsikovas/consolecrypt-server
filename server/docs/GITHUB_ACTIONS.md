@@ -60,16 +60,21 @@ ghcr.io/evsikovas/consolecrypt-server:<version>
 
 1. Проверить и включить изменения в `main`, поднять `server/Cargo.toml` и запись
    самого сервера в `server/Cargo.lock` (пример ниже — `0.1.13`).
-2. После локальной проверки `main` создать и отправить тег на выбранном коммите:
+2. **До отправки тега** сделать свежую резервную копию production БД, проверить
+   возможность восстановления и совместимость миграций с предыдущим сервером.
+   При настроенной production-конфигурации этот же workflow автоматически
+   перейдёт от публикации к deploy; отдельной паузы для резервного копирования нет.
+3. После локальной проверки `main` и подготовки резервной копии создать и
+   отправить тег на выбранном коммите:
 
    ```sh
    git tag -a v0.1.13 -m 'ConsoleCrypt Server 0.1.13'
    git push origin v0.1.13
    ```
 
-3. Дождаться обеих архитектур и manifest, сохранить `server-image.json`.
-4. Сделать и проверить резервную копию production БД; проверить совместимость
-   миграций с предыдущим сервером. Только затем обновлять существующий сервис.
+4. Дождаться обеих архитектур, manifest и настроенного deploy, сохранить
+   `server-image.json`; проверить `/readyz` и версию/source в `/v1/meta`.
+   Если deploy пропущен, публикация образа сама по себе не обновляет сервис.
 5. После выпуска отдельно обновить pinned digest и appVersion в Helm/Compose
    примерах. До проверки нового образа они сохраняют последний проверенный 0.1.12.
 
@@ -80,15 +85,17 @@ ghcr.io/evsikovas/consolecrypt-server:<version>
 данные, не создаёт новый PostgreSQL и не меняет proxy, DNS, SMTP или другие
 Compose-сервисы. Нужны Python 3, Docker и Compose v2 с `up --wait`.
 
-Сохраните приватный JSON-конфиг вне Git; пути и имена ниже — пример, их нужно
-сверить с действующей установкой:
+Сохраните приватный JSON-конфиг вне Git. Ниже показана топология существующего
+публичного API `sync.consolecrypt.dev`: каталог `/opt/consolecrypt/api`,
+Compose-проект `consolecrypt-api`. Для своей установки подставьте действующие
+пути и имена; не меняйте имя проекта или volume ради обновления.
 
 ```json
 {
-  "project_directory": "/opt/consolecrypt",
-  "project": "consolecrypt",
-  "compose_files": ["/opt/consolecrypt/compose.yaml"],
-  "env_file": "/opt/consolecrypt/server.env",
+  "project_directory": "/opt/consolecrypt/api",
+  "project": "consolecrypt-api",
+  "compose_files": ["/opt/consolecrypt/api/compose.yaml"],
+  "env_file": "/opt/consolecrypt/api/server.env",
   "service": "server",
   "state_directory": "/opt/consolecrypt/releases/server",
   "base_url": "https://sync.consolecrypt.dev"
@@ -98,7 +105,7 @@ Compose-сервисы. Нужны Python 3, Docker и Compose v2 с `up --wait`
 После доставки script и manifest из того же проверенного тега:
 
 ```sh
-python3 release-compose.py --config /etc/consolecrypt/server-release.json \
+python3 release-compose.py --config /opt/consolecrypt/releases/server/server.json \
   --manifest server-image.json --tag v0.1.13 --revision FULL_COMMIT_FROM_WORKFLOW
 ```
 
@@ -110,6 +117,7 @@ python3 release-compose.py --config /etc/consolecrypt/server-release.json \
 
 `state_directory/compose.release.json` — постоянный дополнительный Compose-файл;
 используйте его после основного файла при следующих ручных `compose up`.
+В показанной установке это `/opt/consolecrypt/releases/server/compose.release.json`.
 Иначе старый image из основного Compose-файла может вернуться. Не выполняйте
 `docker image prune -a` до завершения проверки и срока хранения rollback.
 
@@ -122,7 +130,7 @@ python3 release-compose.py --config /etc/consolecrypt/server-release.json \
 После проверки совместимости предыдущего сервера с текущей схемой:
 
 ```sh
-python3 release-compose.py --config /etc/consolecrypt/server-release.json --rollback
+python3 release-compose.py --config /opt/consolecrypt/releases/server/server.json --rollback
 ```
 
 Откат запускает точный сохранённый локальный image ID без скачивания или сборки,
