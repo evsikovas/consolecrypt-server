@@ -1,0 +1,7 @@
+# Legacy CI is disabled. Releases use vX.Y.Z tags in GitHub Actions.
+workflow:
+  rules:
+    - when: never
+stages: [build]
+include:
+  - local: server/ci/registry.yml
