@@ -102,3 +102,13 @@ windows_password.txt
 *.keystore
 *.jks
 kubeconfig*
+
+# Local planning and work reports stay outside the repository.
+/BACKLOG.md
+/docs/specs/
+/docs/public/VALIDATION_*.md
+/docs/public/WINDOWS_VALIDATION.md
+AGENTS.md
+CLAUDE.md
+.codex/
+.claude/
