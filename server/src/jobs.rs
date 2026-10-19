@@ -123,6 +123,14 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<MaintenanceReport> {
             .rows_affected();
         }
 
+        // Both login and request proofs retain their nonce beyond their
+        // allowed clock-skew window. Only expired markers are safe to remove.
+        report.login_nonces_deleted =
+            sqlx::query("DELETE FROM device_login_nonces WHERE expires_at < now()")
+                .execute(&mut *conn)
+                .await?
+                .rows_affected();
+
         // Refresh tokens past expiry can no longer be replayed meaningfully.
         report.refresh_tokens_deleted =
             sqlx::query("DELETE FROM refresh_tokens WHERE expires_at < now()")

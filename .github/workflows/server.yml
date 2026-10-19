@@ -2,18 +2,14 @@ name: Server
 
 on:
   push:
-    branches: [main]
-    tags: ['server-v*']
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
+    tags: ['v*']
 
 permissions:
   contents: read
 
 concurrency:
   group: server-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -55,7 +51,9 @@ jobs:
       - name: Protocol tests
         run: cargo test --locked --manifest-path crates/Cargo.toml
       - name: Publication guards
-        run: python3 -m unittest discover -s server/scripts -p 'test_publish*.py' -v
+        run: |
+          python3 -m unittest discover -s server/scripts -p 'test_publish*.py' -v
+          python3 -m unittest discover -s server/scripts -p 'test_release*.py' -v
       - name: Server, native configuration, sharing and backup/restore tests
         env:
           CC_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
@@ -64,14 +62,30 @@ jobs:
           CC_TEST_PG_USER: postgres
         run: cargo test --locked --manifest-path server/Cargo.toml --all-targets -- --test-threads=4
 
-  images:
-    name: Build and verify ${{ matrix.arch }} image
+  release:
+    name: Validate release tag and source
     needs: validate
-    # External PRs never receive package credentials or run on personal runners.
     if: >-
       github.repository == 'evsikovas/consolecrypt-server' &&
-      github.event_name != 'pull_request' &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/server-v'))
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      revision: ${{ steps.release.outputs.revision }}
+      source_url: ${{ steps.release.outputs.source_url }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: release
+        run: python3 server/scripts/release.py
+
+  images:
+    name: Build and verify ${{ matrix.arch }} image
+    needs: release
+    # main/PR/manual branch runs cannot reach this job or receive package credentials.
     strategy:
       fail-fast: false
       matrix:
@@ -88,29 +102,31 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ needs.release.outputs.revision }}
           persist-credentials: false
-      - name: Read and validate image metadata
+      - name: Use validated release metadata
         env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.revision }}
+          SOURCE_URL: ${{ needs.release.outputs.source_url }}
           ARCH: ${{ matrix.arch }}
         run: |
-          python3 - <<'PY'
-          import os, re, tomllib
-          from pathlib import Path
-          version = tomllib.loads(Path('server/Cargo.toml').read_text())['package']['version']
-          assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'A stable server version is required'
-          ref = os.environ['GITHUB_REF']
-          if ref.startswith('refs/tags/'):
-              assert ref == f'refs/tags/server-v{version}', 'Tag must match server/Cargo.toml'
-          sha = os.environ['GITHUB_SHA']
-          values = {
-              'SERVER_VERSION': version,
-              'IMAGE_TAG': f'{version}-{sha[:12]}-{os.environ["ARCH"]}',
-              'SOURCE_URL': f'https://github.com/{os.environ["GITHUB_REPOSITORY"]}/tree/{sha}',
-          }
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.writelines(f'{key}={value}\n' for key, value in values.items())
-          PY
+          printf 'SERVER_VERSION=%s\nIMAGE_TAG=%s-%s-%s\nSOURCE_URL=%s\n' \
+            "$VERSION" "$VERSION" "$REVISION" "$ARCH" "$SOURCE_URL" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to replace an existing release
+        run: |
+          PYTHONPATH=server/scripts python3 - <<'PYCODE'
+          import os
+          from release import require_absent
+          for tag in (os.environ['SERVER_VERSION'], os.environ['IMAGE_TAG']):
+              require_absent(os.environ['IMAGE'] + ':' + tag)
+          PYCODE
       - name: Build the native image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -134,11 +150,6 @@ jobs:
             --image "$IMAGE:$IMAGE_TAG" \
             --server-version "$SERVER_VERSION" \
             --source-code-url "$SOURCE_URL"
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push the verified image
         env:
           ARCH: ${{ matrix.arch }}
@@ -156,7 +167,7 @@ jobs:
 
   manifest:
     name: Publish the multi-platform manifest
-    needs: images
+    needs: [release, images]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -165,6 +176,8 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ needs.release.outputs.revision }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -186,3 +199,83 @@ jobs:
           path: dist/server-image.json
           retention-days: 90
           if-no-files-found: error
+
+  release_object:
+    name: Publish release receipts
+    needs: [release, manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.release.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: server-image
+          path: dist
+      - name: Stage receipts and publish the new release once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 server/scripts/publish_release.py
+
+  deployment_config:
+    name: Check production deployment configuration
+    needs: release_object
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      configured: ${{ steps.config.outputs.configured }}
+    steps:
+      - id: config
+        env:
+          PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ vars.PROD_SSH_USER }}
+          PROD_DEPLOY_CONFIG_PATH: ${{ vars.PROD_DEPLOY_CONFIG_PATH }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          python3 - <<'PYCODE'
+          import os
+          required = ('PROD_SSH_HOST', 'PROD_SSH_USER', 'PROD_DEPLOY_CONFIG_PATH',
+                      'PROD_SSH_PRIVATE_KEY', 'PROD_SSH_KNOWN_HOSTS')
+          missing = [name for name in required if not os.environ.get(name, '').strip()]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('configured=' + str(not missing).lower() + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Production deploy skipped: missing ' + ', '.join(missing) + '.\n'
+                            if missing else 'Production SSH configuration is present; deploy job follows.\n')
+          PYCODE
+
+  deploy:
+    name: Deploy verified digest to existing production Compose
+    needs: [release, release_object, deployment_config]
+    if: needs.deployment_config.outputs.configured == 'true'
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: consolecrypt-server-production
+      cancel-in-progress: false
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.release.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: server-image
+          path: dist
+      - name: Deploy and verify public health/version
+        env:
+          PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ vars.PROD_SSH_USER }}
+          PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT }}
+          PROD_DEPLOY_CONFIG_PATH: ${{ vars.PROD_DEPLOY_CONFIG_PATH }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: python3 server/scripts/deploy_ssh.py

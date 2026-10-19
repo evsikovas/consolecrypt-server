@@ -24,11 +24,11 @@ class PublicationGuards(unittest.TestCase):
         self.assertEqual(plan['tags'], ['sha-' + 'a' * 40, '0.1.9-' + 'a' * 12])
 
     def test_server_release_tag_adds_matching_version(self):
-        plan = publish.source_plan(self.root, {'CI_COMMIT_TAG': 'server-v0.1.9'})
+        plan = publish.source_plan(self.root, {'CI_COMMIT_TAG': 'v0.1.9'})
         self.assertIn('0.1.9', plan['tags'])
 
     def test_client_or_mismatching_tag_is_rejected(self):
-        for tag in ('v0.1.9', 'server-v0.1.8'):
+        for tag in ('server-v0.1.9', 'v0.1.8'):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 publish.source_plan(self.root, {'CI_COMMIT_TAG': tag})
 

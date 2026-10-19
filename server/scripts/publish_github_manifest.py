@@ -1,31 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
-"""Combine the two tested GitHub Actions images; never deploy production."""
+"""Publish a tag release manifest from the two tested architecture digests."""
 
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
-import tomllib
+from release import IMAGE, release_plan, require_absent
 
 
 def main():
-    repository = "evsikovas/consolecrypt-server"
-    if os.environ.get("GITHUB_REPOSITORY") != repository:
-        raise ValueError("Publishing is restricted to the upstream repository")
-    image = f"ghcr.io/{repository}"
-    sha = os.environ["GITHUB_SHA"]
-    if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise ValueError("Expected a full commit ID")
-    version = tomllib.loads(Path("server/Cargo.toml").read_text())["package"]["version"]
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-        raise ValueError("Expected a stable server version")
-    ref = os.environ["GITHUB_REF"]
-    release = ref == f"refs/tags/server-v{version}"
-    if ref != "refs/heads/main" and not release:
-        raise ValueError("Publish only main or the matching server release tag")
+    plan = release_plan()
+    image = IMAGE
+    sha = plan['revision']
+    version = plan['version']
 
     sources = []
     for architecture in ("amd64", "arm64"):
@@ -33,11 +23,9 @@ def main():
         if not re.fullmatch(re.escape(image) + r"@sha256:[0-9a-f]{64}", digest):
             raise ValueError(f"Invalid {architecture} image digest")
         sources.append(digest)
-    tags = [f"{image}:sha-{sha}", f"{image}:{version}-{sha[:12]}"]
-    # Main builds are candidates. Only an explicit server-vX.Y.Z tag moves the
-    # stable aliases, so an unrelated README edit cannot replace a release.
-    if release:
-        tags += [f"{image}:{version}", f"{image}:latest"]
+    tags = [f"{image}:sha-{sha}", f"{image}:{version}"]
+    for tag in tags:
+        require_absent(tag)
     command = ["docker", "buildx", "imagetools", "create"]
     for tag in tags:
         command += ["--tag", tag]
@@ -52,12 +40,13 @@ def main():
     report = {
         "version": version,
         "revision": sha,
-        "source_url": f"https://github.com/{repository}/tree/{sha}",
+        "source_url": plan["source_url"],
         "image": f"{image}@{digest}",
         "digest": digest,
         "tags": tags,
         "platforms": ["linux/amd64", "linux/arm64"],
-        "release": release,
+        "release": True,
+        "tag": plan["tag"],
     }
     Path("dist/server-image.json").write_text(json.dumps(report, indent=2) + "\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:

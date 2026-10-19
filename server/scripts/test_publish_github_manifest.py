@@ -26,11 +26,17 @@ class GitHubPublicationGuards(unittest.TestCase):
         self.environment = patch.dict(os.environ, {
             'GITHUB_REPOSITORY': 'evsikovas/consolecrypt-server',
             'GITHUB_SHA': 'c' * 40,
-            'GITHUB_REF': 'refs/heads/main',
+            'GITHUB_REF': 'refs/tags/v0.1.12',
+            'GITHUB_EVENT_NAME': 'push',
             'GITHUB_STEP_SUMMARY': str(self.root / 'summary.md'),
         })
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        self.source = patch.object(publish, 'release_plan', return_value={
+            'version': '0.1.12', 'revision': 'c' * 40, 'tag': 'v0.1.12',
+            'source_url': 'https://github.com/evsikovas/consolecrypt-server/tree/' + 'c' * 40,
+        }).start()
+        self.absent = patch.object(publish, 'require_absent').start()
         self.run = patch.object(publish.subprocess, 'run').start()
         self.inspect = patch.object(publish.subprocess, 'check_output',
                                     return_value=json.dumps({'digest': 'sha256:' + 'd' * 64})).start()
@@ -40,33 +46,27 @@ class GitHubPublicationGuards(unittest.TestCase):
         publish.main()
         return json.loads((self.root / 'dist/server-image.json').read_text())
 
-    def test_main_does_not_move_stable_aliases(self):
+    def test_release_publishes_verified_digests_without_mutable_latest(self):
         report = self.report()
-        self.assertFalse(report['release'])
-        self.assertEqual(len(report['tags']), 2)
+        self.assertTrue(report['release'])
+        self.assertEqual(report['tag'], 'v0.1.12')
+        self.assertEqual(report['tags'], [self.image + ':sha-' + 'c' * 40, self.image + ':0.1.12'])
         self.assertEqual(report['revision'], 'c' * 40)
         self.assertEqual(report['image'], self.image + '@sha256:' + 'd' * 64)
         command = self.run.call_args.args[0]
         self.assertEqual(command[-2:], [self.image + '@sha256:' + char * 64 for char in ('a', 'b')])
+        self.assertEqual(self.absent.call_count, 2)
 
-    def test_matching_release_tag_adds_stable_aliases(self):
-        with patch.dict(os.environ, {'GITHUB_REF': 'refs/tags/server-v0.1.12'}):
-            report = self.report()
-        self.assertTrue(report['release'])
-        self.assertIn(self.image + ':0.1.12', report['tags'])
-        self.assertIn(self.image + ':latest', report['tags'])
+    def test_invalid_source_cannot_publish(self):
+        self.source.side_effect = ValueError('not a matching tag from main')
+        with self.assertRaises(ValueError):
+            publish.main()
+        self.run.assert_not_called()
 
-    def test_untrusted_ref_or_repository_cannot_publish(self):
-        for environment in [
-            {'GITHUB_REF': 'refs/heads/feature'},
-            {'GITHUB_REF': 'refs/pull/1/merge'},
-            {'GITHUB_REF': 'refs/tags/server-v0.1.11'},
-            {'GITHUB_REPOSITORY': 'other/server'},
-            {'GITHUB_SHA': 'HEAD'},
-        ]:
-            with self.subTest(environment=environment), patch.dict(os.environ, environment):
-                with self.assertRaises(ValueError):
-                    publish.main()
+    def test_existing_release_is_not_overwritten(self):
+        self.absent.side_effect = ValueError('already published')
+        with self.assertRaises(ValueError):
+            publish.main()
         self.run.assert_not_called()
 
     def test_missing_architecture_cannot_publish(self):

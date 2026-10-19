@@ -677,7 +677,7 @@ pub async fn recipient(
         ));
     }
     let user: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE lower(email)=$1 AND status='active' AND email_verified_at IS NOT NULL")
-        .bind(email).fetch_optional(&mut *tx).await?;
+        .bind(crate::util::email_key(&email)).fetch_optional(&mut *tx).await?;
     let user = user.ok_or_else(AppError::not_found)?;
     let rows: Vec<(Uuid, Vec<u8>, Vec<u8>)> = sqlx::query_as("SELECT id,encryption_public_key,signing_public_key FROM devices WHERE user_id=$1 AND revoked_at IS NULL ORDER BY id LIMIT $2")
         .bind(user).bind((MAX_MEMBERS + 1) as i64).fetch_all(&mut *tx).await?;

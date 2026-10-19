@@ -12,6 +12,84 @@ use reqwest::StatusCode;
 use serde_json::json;
 
 #[tokio::test]
+async fn maintenance_preserves_replay_protection_and_removes_expired_nonces() {
+    use cc_protocol::devices::RequestProof;
+    use cc_protocol::version::HEADER_DEVICE_PROOF;
+
+    let srv = server!();
+    let a = srv.new_account().await;
+    let proof = srv
+        .proof_for(&a.access, "GET", paths::AUTH_ME, b"")
+        .unwrap();
+    let send = |proof: &str| {
+        srv.http
+            .get(srv.url(paths::AUTH_ME))
+            .bearer_auth(&a.access)
+            .header(HEADER_DEVICE_PROOF, proof)
+            .send()
+    };
+    assert_eq!(send(&proof).await.unwrap().status(), StatusCode::OK);
+    // Registration already consumed a login nonce; the GET added a request
+    // nonce. Maintenance must preserve both while their proof windows are live.
+    let live_count = srv
+        .db_scalar_i64("SELECT count(*) FROM device_login_nonces")
+        .await;
+    assert!(live_count >= 2);
+
+    let expired_proof = request_proof(
+        a.device.id,
+        &a.device.signing,
+        "GET",
+        paths::AUTH_ME,
+        b"",
+        now_unix() - cc_protocol::limits::MAX_REQUEST_PROOF_SKEW_SECONDS - 120,
+    );
+    let nonce = RequestProof::decode(&expired_proof).unwrap().nonce;
+    sqlx::query(
+        "INSERT INTO device_login_nonces (device_id, nonce, expires_at)
+         VALUES ($1, $2, now() - interval '1 minute')",
+    )
+    .bind(uuid::Uuid::from(a.device.id))
+    .bind(&nonce[..])
+    .execute(&srv.state.db)
+    .await
+    .unwrap();
+
+    let report = jobs::run_once(&srv.state).await.unwrap();
+    assert_eq!(report.login_nonces_deleted, 1);
+    assert_eq!(
+        srv.db_scalar_i64("SELECT count(*) FROM device_login_nonces")
+            .await,
+        live_count
+    );
+    assert_eq!(
+        srv.db_scalar_i64("SELECT count(*) FROM device_login_nonces WHERE expires_at < now()")
+            .await,
+        0
+    );
+
+    let replay = send(&proof).await.unwrap();
+    assert_eq!(replay.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        replay.json::<serde_json::Value>().await.unwrap()["details"]["reason"],
+        "replayed"
+    );
+    let stale = send(&expired_proof).await.unwrap();
+    assert_eq!(stale.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        stale.json::<serde_json::Value>().await.unwrap()["details"]["reason"],
+        "stale"
+    );
+    assert_eq!(
+        jobs::run_once(&srv.state)
+            .await
+            .unwrap()
+            .login_nonces_deleted,
+        0
+    );
+}
+
+#[tokio::test]
 async fn maintenance_purges_only_what_is_old() {
     let srv = server!();
     let a = srv.new_account().await;

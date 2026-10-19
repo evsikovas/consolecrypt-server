@@ -1,9 +1,20 @@
 # Source migration / Перенос исходников
 
 This repository was extracted from the published ConsoleCrypt GitLab main history on 2026-10-04.
-The original repository remains operational: https://git.evsikov.net/publics/consolecrypt.
-GitLab CI, production deployment, DNS, analytics, signing and update delivery have not been switched to GitHub.
-There are no active GitHub Actions workflows in this migration.
+The original source history is at https://git.evsikov.net/publics/consolecrypt;
+legacy GitLab configuration is retained for compatibility.
+
+The current [Server workflow](.github/workflows/server.yml) runs in GitHub Actions.
+It starts only on pushed `vX.Y.Z` tags; branch pushes, PRs and manual workflow
+dispatch do not start it. Only matching tags whose commits belong to main may build,
+verify and publish native AMD64/ARM64 images and their multi-platform manifest.
+Existing image references are not overwritten; deployments select the recorded
+digest. The legacy GitLab workflow is disabled.
+
+[Release and rollback instructions](server/docs/GITHUB_ACTIONS.md) describe the
+existing Compose-service updater. Publishing an image does not move the database
+or change DNS, SMTP, analytics or client update delivery. Production configuration
+and credentials remain outside the repository.
 
 Перенесены необходимые исходники и публичная документация. Внутренние ТЗ, планы,
 локальные настройки, секреты и рабочие данные не включены. История отфильтрована:

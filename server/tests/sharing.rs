@@ -379,16 +379,24 @@ async fn recipient_lookup_requires_verified_accounts() {
             .code(),
         ErrorCode::NotFound
     );
-    sqlx::query("UPDATE users SET email_verified_at=now() WHERE id=$1")
+    sqlx::query("UPDATE users SET email_verified_at=now(), email=$2 WHERE id=$1")
         .bind(Uuid::from(other.user_id))
+        .bind(other.email.to_uppercase())
         .execute(&srv.state.db)
         .await
         .unwrap();
-    let found = service::recipient(&srv.state, &context(&owner), &other.email)
-        .await
-        .unwrap();
-    assert_eq!(found.devices[0].device_id, other.device.id);
-    assert_eq!(found.devices[0].role, SharingRole::Reader);
+    for email in [
+        other.email.clone(),
+        other.email.to_uppercase(),
+        format!("  {}  ", other.email.replace("user-", "User-")),
+    ] {
+        let found = service::recipient(&srv.state, &context(&owner), &email)
+            .await
+            .unwrap();
+        assert_eq!(found.user_id, other.user_id);
+        assert_eq!(found.devices[0].device_id, other.device.id);
+        assert_eq!(found.devices[0].role, SharingRole::Reader);
+    }
     assert_eq!(
         srv.db_scalar_i64("SELECT count(*) FROM shared_item_devices")
             .await,

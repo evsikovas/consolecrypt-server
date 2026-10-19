@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Build, verify and publish the API-only server for amd64 and arm64.
+"""Legacy local verification tool for the API-only server.
 
-CI uses its own short-lived registry credentials; local --verify-only needs none.
+Publication moved to the tag-only GitHub Actions workflow. --verify-only needs no credentials.
 No production service/database is accessed. Test containers are always removed.
 """
 from __future__ import annotations
@@ -51,8 +51,8 @@ def source_plan(root, env, allow_dirty=False):
     tags = [f'sha-{revision}', f'{version}-{revision[:12]}']
     release = env.get('CI_COMMIT_TAG', '')
     if release:
-        if release != f'server-v{version}':
-            raise ValueError('Release tag must be server-v<server Cargo.toml version>')
+        if release != f'v{version}':
+            raise ValueError('Release tag must be v<server Cargo.toml version>')
         tags.append(version)
     return {'repository': REPOSITORY, 'revision': revision, 'version': version,
             'source': f'{PROJECT}/-/tree/{revision}', 'tags': tags,
@@ -174,6 +174,8 @@ def main():
     parser.add_argument('--verify-only', action='store_true', help='Build/test without registry credentials or publication')
     parser.add_argument('--allow-dirty', action='store_true', help='Only with --verify-only, for local development')
     args = parser.parse_args()
+    if not args.verify_only:
+        parser.error('Legacy publication is disabled; push a matching vX.Y.Z tag to GitHub Actions')
     if args.allow_dirty and not args.verify_only:
         parser.error('--allow-dirty requires --verify-only')
     env = os.environ.copy()
