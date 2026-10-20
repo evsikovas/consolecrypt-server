@@ -68,6 +68,7 @@ pub(super) fn kind_enabled(config: &Config, kind: SharedItemKind) -> bool {
         SharedItemKind::Host | SharedItemKind::Snippet => true,
         SharedItemKind::Group => config.shared_groups_enabled,
         SharedItemKind::Secret => config.shared_secrets_enabled,
+        SharedItemKind::KubeContext => config.shared_kube_contexts_enabled,
     }
 }
 
@@ -76,6 +77,7 @@ pub(super) fn kind_enabled(config: &Config, kind: SharedItemKind) -> bool {
 pub struct ListKinds {
     pub include_groups: bool,
     pub include_secrets: bool,
+    pub include_kube_contexts: bool,
 }
 impl ListKinds {
     fn includes(self, kind: SharedItemKind) -> bool {
@@ -83,11 +85,13 @@ impl ListKinds {
             SharedItemKind::Host | SharedItemKind::Snippet => true,
             SharedItemKind::Group => self.include_groups,
             SharedItemKind::Secret => self.include_secrets,
+            SharedItemKind::KubeContext => self.include_kube_contexts,
         }
     }
     fn validate(self, config: &Config) -> AppResult<()> {
         if (self.include_groups && !config.shared_groups_enabled)
             || (self.include_secrets && !config.shared_secrets_enabled)
+            || (self.include_kube_contexts && !config.shared_kube_contexts_enabled)
         {
             return Err(AppError::bad_request("requested sharing kind not enabled"));
         }
@@ -646,6 +650,7 @@ pub async fn capabilities(state: &AppState, auth: &AuthContext) -> AppResult<Sha
         max_ciphertext_bytes: MAX_CIPHERTEXT_BYTES as u32,
         supports_groups: state.config.shared_groups_enabled,
         supports_secrets: state.config.shared_secrets_enabled,
+        supports_kube_contexts: state.config.shared_kube_contexts_enabled,
         supports_owner_online_enrollment_v1: state.config.sharing_owner_online_enrollment_enabled,
     })
 }

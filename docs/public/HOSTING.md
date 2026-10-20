@@ -148,7 +148,8 @@ cc_compose exec -T server /usr/local/bin/consolecrypt-server \
 
 Четыре флага sharing по умолчанию выключены. Если администратор отдельно решил
 включить совместный доступ и проверил совместимость клиентов, он изменяет
-`CC_OBJECT_SHARING_ENABLED`, `CC_SHARED_GROUPS_ENABLED`, `CC_SHARED_SECRETS_ENABLED`
+`CC_OBJECT_SHARING_ENABLED`, `CC_SHARED_GROUPS_ENABLED`, `CC_SHARED_SECRETS_ENABLED`,
+`CC_SHARED_KUBE_CONTEXTS_ENABLED`
 и `CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED` в том же приватном файле на `true`,
 затем пересоздаёт только сервис `server` той же командой. Подписи запросов
 остаются обязательными. Основной флаг обязателен для остальных расширений.
@@ -450,6 +451,7 @@ config:
   objectSharingEnabled: false
   sharedGroupsEnabled: false
   sharedSecretsEnabled: false
+  sharedKubeContextsEnabled: false
   sharingOwnerOnlineEnrollmentEnabled: false
 
 mail:
@@ -632,6 +634,7 @@ config:
   objectSharingEnabled: true
   sharedGroupsEnabled: true
   sharedSecretsEnabled: true
+  sharedKubeContextsEnabled: true
   sharingOwnerOnlineEnrollmentEnabled: true
 ```
 
@@ -737,3 +740,14 @@ cc_kubectl exec deployment/consolecrypt -- \
 PostgreSQL требует отдельного плана переноса данных.
 
 Параметры запуска без Helm: [server/.env.example](../../server/.env.example).
+
+### Общие подключения Kubernetes
+
+`CC_SHARED_KUBE_CONTEXTS_ENABLED=true` разрешает обмен зашифрованными
+подключениями Kubernetes при включённом `CC_OBJECT_SHARING_ENABLED`. Клиент
+проверяет `supports_kube_contexts` в подписанном запросе к `/v1/shares/capabilities`
+и явно запрашивает `include_kube_contexts=true` при чтении списка. Старые клиенты
+продолжают получать прежние типы объектов. Сервер проверяет подписи, права
+устройств и версии; адрес кластера, сертификаты и учётные данные находятся
+в зашифрованном содержимом. Сервер не читает kubeconfig и не подключается к API
+Kubernetes. Отключение флага скрывает общий объект, сохраняя его шифротекст.

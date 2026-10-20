@@ -256,16 +256,21 @@ async fn mixed_kind_pagination_preserves_legacy_results_and_cursor_progress() {
 }
 
 #[tokio::test]
-async fn enabled_group_and_secret_follow_signed_lifecycle_with_immutable_kind() {
+async fn extended_kinds_follow_signed_lifecycle_with_immutable_kind() {
     let srv = server!(|c| {
         c.object_sharing_enabled = true;
         c.shared_groups_enabled = true;
         c.shared_secrets_enabled = true;
+        c.shared_kube_contexts_enabled = true;
     });
     let owner = srv.new_account().await;
     let editor = srv.new_account().await;
     let reader = srv.new_account().await;
-    for kind in [SharedItemKind::Group, SharedItemKind::Secret] {
+    for kind in [
+        SharedItemKind::Group,
+        SharedItemKind::Secret,
+        SharedItemKind::KubeContext,
+    ] {
         let old = create_kind(
             &srv,
             &owner,
@@ -568,4 +573,98 @@ async fn group_access_does_not_authorize_an_independent_child() {
         untouched == group,
         "child grant must not modify the Group ACL/content"
     );
+}
+
+#[tokio::test]
+async fn kube_contexts_are_explicitly_negotiated_and_remain_opaque() {
+    for enabled in [false, true] {
+        let srv = server!(|c| {
+            c.object_sharing_enabled = true;
+            c.shared_kube_contexts_enabled = enabled;
+        });
+        let owner = srv.new_account().await;
+        let reader = srv.new_account().await;
+        let stranger = srv.new_account().await;
+        assert_eq!(caps(&srv, &owner).await["supports_kube_contexts"], enabled);
+        let req = kind_request(
+            &srv,
+            &owner,
+            &[(&reader, SharingRole::Reader)],
+            SharedItemKind::KubeContext,
+        )
+        .await;
+        let id = req.access.manifest.share_id;
+        let (status, _) = srv.post("/v1/shares", Some(&owner.access), &req).await;
+        assert_eq!(
+            status,
+            if enabled {
+                StatusCode::CREATED
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
+        let (status, body) = srv
+            .get("/v1/shares?include_kube_contexts=true", &reader.access)
+            .await;
+        assert_eq!(
+            status,
+            if enabled {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
+        if !enabled {
+            continue;
+        }
+        let page: ShareListPage = serde_json::from_value(body).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].revision.body, req.revision.body);
+        assert_eq!(page.items[0].access.manifest.share_id, id);
+        // A pre-Kubernetes client never receives an enum it cannot decode.
+        assert!(paginated_ids(&srv, &reader, "").await.is_empty());
+        assert!(paginated_ids(&srv, &stranger, "include_kube_contexts=true")
+            .await
+            .is_empty());
+        assert_eq!(
+            srv.get(&path(id), &stranger.access).await.0,
+            StatusCode::NOT_FOUND
+        );
+        for query in [
+            "include_kube_contexts=yes",
+            "include_kube_contexts=true&include_kube_contexts=false",
+        ] {
+            assert_eq!(
+                srv.get(&format!("/v1/shares?{query}"), &reader.access)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let mut config = srv.state.config.clone();
+        config.shared_kube_contexts_enabled = false;
+        config.event_bus = EventBusKind::Local;
+        let disabled = AppState::with_mailer(config, srv.state.db.clone(), srv.mailer.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            service::get(&disabled, &context(&reader), id)
+                .await
+                .unwrap_err()
+                .code(),
+            ErrorCode::NotFound
+        );
+        assert_eq!(
+            service::create(&disabled, &context(&owner), req.clone())
+                .await
+                .unwrap_err()
+                .code(),
+            ErrorCode::BadRequest
+        );
+        // Turning the gate off neither destroys ciphertext nor grants new access.
+        let restored = service::get(&srv.state, &context(&reader), id)
+            .await
+            .unwrap();
+        assert_eq!(restored.revision.body, req.revision.body);
+    }
 }

@@ -145,7 +145,7 @@ def main():
             assert services["server"]["environment"]["CC_SMTP_PASSWORD"].replace("$$", "$") == special_password
             assert services["server"]["environment"]["CC_REQUIRE_REQUEST_PROOF"] == "true"
             for flag in ("CC_OBJECT_SHARING_ENABLED", "CC_SHARED_GROUPS_ENABLED",
-                         "CC_SHARED_SECRETS_ENABLED", "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED"):
+                         "CC_SHARED_SECRETS_ENABLED", "CC_SHARED_KUBE_CONTEXTS_ENABLED", "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED"):
                 assert services["server"]["environment"][flag] == "false"
             secret_values = [services["postgres"]["environment"]["POSTGRES_PASSWORD"],
                              services["server"]["environment"]["CC_DATABASE_PASSWORD"], special_password]

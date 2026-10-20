@@ -8,6 +8,7 @@ fn old_capabilities_fail_closed_for_independent_extensions() {
     let decoded: SharingCapabilities = serde_json::from_value(old).unwrap();
     assert!(!decoded.supports_groups);
     assert!(!decoded.supports_secrets);
+    assert!(!decoded.supports_kube_contexts);
     assert!(!decoded.supports_owner_online_enrollment_v1);
 }
 
@@ -21,6 +22,7 @@ fn extension_capabilities_remain_independent_and_typed() {
     let decoded: SharingCapabilities = serde_json::from_value(value.clone()).unwrap();
     assert!(decoded.supports_groups);
     assert!(!decoded.supports_secrets);
+    assert!(!decoded.supports_kube_contexts);
     assert!(!decoded.supports_owner_online_enrollment_v1);
     value["supports_secrets"] = serde_json::json!("true");
     assert!(serde_json::from_value::<SharingCapabilities>(value).is_err());

@@ -33,15 +33,18 @@ pub enum SharedItemKind {
     Snippet,
     /// Requires independently advertised explicit-secret support.
     Secret,
+    /// Requires independently advertised Kubernetes context support.
+    KubeContext,
 }
 
 impl SharedItemKind {
-    const fn tag(self) -> u8 {
+    pub(crate) const fn tag(self) -> u8 {
         match self {
             Self::Host => 1,
             Self::Group => 2,
             Self::Snippet => 3,
             Self::Secret => 4,
+            Self::KubeContext => 5,
         }
     }
 }
@@ -205,6 +208,8 @@ pub struct SharingCapabilities {
     pub supports_groups: bool,
     #[serde(default)]
     pub supports_secrets: bool,
+    #[serde(default)]
+    pub supports_kube_contexts: bool,
     #[serde(default)]
     pub supports_owner_online_enrollment_v1: bool,
 }

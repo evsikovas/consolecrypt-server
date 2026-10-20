@@ -21,7 +21,7 @@
 адресом, а данные и идентификатор серверного экземпляра переносятся вместе с БД.
 
 Версии компонентов независимы: в текущем `server/Cargo.toml` указана
-**0.1.13**, версия протокола — **1.5**. Версия клиента независима от версии сервера.
+**0.1.14**, версия протокола — **1.5**. Версия клиента независима от версии сервера.
 Ветка `main` может содержать изменения после сборки опубликованного образа;
 точную сборку следует определять по Git-коммиту и digest образа.
 
@@ -284,6 +284,7 @@ cc_compose exec -T server /usr/local/bin/consolecrypt-server \
 CC_OBJECT_SHARING_ENABLED=false
 CC_SHARED_GROUPS_ENABLED=false
 CC_SHARED_SECRETS_ENABLED=false
+CC_SHARED_KUBE_CONTEXTS_ENABLED=false
 CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED=false
 ```
 

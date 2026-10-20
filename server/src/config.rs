@@ -53,6 +53,7 @@ pub struct Config {
     /// ADR-0009 kind capabilities; each requires general sharing and proofs.
     pub shared_groups_enabled: bool,
     pub shared_secrets_enabled: bool,
+    pub shared_kube_contexts_enabled: bool,
     /// Owner-online enrollment; requires sharing and strict device proofs.
     pub sharing_owner_online_enrollment_enabled: bool,
     pub event_bus: EventBusKind,
@@ -261,6 +262,11 @@ impl Config {
                 "CC_SHARED_SECRETS_ENABLED",
                 false,
             )?,
+            shared_kube_contexts_enabled: parse_bool(
+                get("CC_SHARED_KUBE_CONTEXTS_ENABLED"),
+                "CC_SHARED_KUBE_CONTEXTS_ENABLED",
+                false,
+            )?,
             sharing_owner_online_enrollment_enabled: parse_bool(
                 get("CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED"),
                 "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED",
@@ -382,10 +388,12 @@ impl Config {
         if self.object_sharing_enabled && !self.require_request_proof {
             return err("object sharing requires CC_REQUIRE_REQUEST_PROOF=true");
         }
-        if (self.shared_groups_enabled || self.shared_secrets_enabled)
+        if (self.shared_groups_enabled
+            || self.shared_secrets_enabled
+            || self.shared_kube_contexts_enabled)
             && (!self.object_sharing_enabled || !self.require_request_proof)
         {
-            return err("shared groups/secrets require object sharing and strict request proofs");
+            return err("extended shared kinds require object sharing and strict request proofs");
         }
         if self.sharing_owner_online_enrollment_enabled
             && (!self.object_sharing_enabled || !self.require_request_proof)
@@ -505,6 +513,10 @@ impl fmt::Debug for Config {
             .field("shared_groups_enabled", &self.shared_groups_enabled)
             .field("shared_secrets_enabled", &self.shared_secrets_enabled)
             .field(
+                "shared_kube_contexts_enabled",
+                &self.shared_kube_contexts_enabled,
+            )
+            .field(
                 "sharing_owner_online_enrollment_enabled",
                 &self.sharing_owner_online_enrollment_enabled,
             )
@@ -615,6 +627,7 @@ mod sharing_config_tests {
         for flag in [
             "CC_SHARED_GROUPS_ENABLED",
             "CC_SHARED_SECRETS_ENABLED",
+            "CC_SHARED_KUBE_CONTEXTS_ENABLED",
             "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED",
         ] {
             let load = |sharing: bool, proofs: bool, value: &str| {
@@ -639,12 +652,20 @@ mod sharing_config_tests {
                 flag == "CC_SHARED_SECRETS_ENABLED"
             );
             assert_eq!(
+                config.shared_kube_contexts_enabled,
+                flag == "CC_SHARED_KUBE_CONTEXTS_ENABLED"
+            );
+            assert_eq!(
                 config.sharing_owner_online_enrollment_enabled,
                 flag == "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED"
             );
         }
         let defaults = Config::for_tests("postgres://localhost/unused");
-        assert!(!defaults.shared_groups_enabled && !defaults.shared_secrets_enabled);
+        assert!(
+            !defaults.shared_groups_enabled
+                && !defaults.shared_secrets_enabled
+                && !defaults.shared_kube_contexts_enabled
+        );
     }
 
     #[test]

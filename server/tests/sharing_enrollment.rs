@@ -1298,11 +1298,13 @@ async fn disabling_enrollment_or_kind_preserves_owner_revoke_and_chain_recovery_
         enabled(c);
         c.shared_groups_enabled = true;
         c.shared_secrets_enabled = true;
+        c.shared_kube_contexts_enabled = true;
     });
     for kind in [
         SharedItemKind::Host,
         SharedItemKind::Group,
         SharedItemKind::Secret,
+        SharedItemKind::KubeContext,
     ] {
         let owner = srv.new_account().await;
         let anchor = srv.new_account().await;
@@ -1335,6 +1337,7 @@ async fn disabling_enrollment_or_kind_preserves_owner_revoke_and_chain_recovery_
             SharedItemKind::Host => c.sharing_owner_online_enrollment_enabled = false,
             SharedItemKind::Group => c.shared_groups_enabled = false,
             SharedItemKind::Secret => c.shared_secrets_enabled = false,
+            SharedItemKind::KubeContext => c.shared_kube_contexts_enabled = false,
             _ => unreachable!(),
         })
         .await;
@@ -1495,6 +1498,7 @@ async fn disabling_enrollment_or_kind_preserves_owner_revoke_and_chain_recovery_
             c.sharing_owner_online_enrollment_enabled = false;
             c.shared_groups_enabled = false;
             c.shared_secrets_enabled = false;
+            c.shared_kube_contexts_enabled = false;
         })
         .await;
         assert_eq!(

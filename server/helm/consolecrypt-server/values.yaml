@@ -270,6 +270,7 @@ config:
   objectSharingEnabled: false
   sharedGroupsEnabled: false
   sharedSecretsEnabled: false
+  sharedKubeContextsEnabled: false
   sharingOwnerOnlineEnrollmentEnabled: false
   log:
     # -- json | pretty (CC_LOG_FORMAT).

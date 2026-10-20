@@ -300,3 +300,15 @@ fn revision_cas_and_signed_tombstones_are_structurally_unambiguous() {
     m.base_revision = i64::MAX;
     assert!(sharing_mutation_message(&m).is_err());
 }
+
+#[test]
+fn kubernetes_kind_has_an_independent_signed_domain() {
+    let mut m = manifest();
+    let old_manifest = sharing_manifest_message(&m).unwrap();
+    let old_aad = sharing_object_aad(&context(&m)).unwrap();
+    m.kind = SharedItemKind::KubeContext;
+    assert_ne!(old_manifest, sharing_manifest_message(&m).unwrap());
+    assert_ne!(old_aad, sharing_object_aad(&context(&m)).unwrap());
+    assert_eq!(sharing_object_aad(&context(&m)).unwrap().last(), Some(&5));
+    assert_eq!(serde_json::to_value(m.kind).unwrap(), "kube_context");
+}

@@ -369,14 +369,6 @@ fn role_tag(role: SharingRole) -> u8 {
         SharingRole::Editor => 2,
     }
 }
-fn kind_tag(kind: SharedItemKind) -> u8 {
-    match kind {
-        SharedItemKind::Host => 1,
-        SharedItemKind::Group => 2,
-        SharedItemKind::Snippet => 3,
-        SharedItemKind::Secret => 4,
-    }
-}
 
 pub fn validate_scope(scope: &EnrollmentScope) -> Result<()> {
     require(
@@ -826,7 +818,7 @@ fn scope_bytes(out: &mut Vec<u8>, scope: &EnrollmentScope) {
     out.extend_from_slice(scope.server_instance_id.as_bytes());
     out.extend_from_slice(scope.share_id.as_bytes());
     out.extend_from_slice(scope.item_id.as_bytes());
-    out.push(kind_tag(scope.kind));
+    out.push(scope.kind.tag());
 }
 fn device_bytes(out: &mut Vec<u8>, device: &EnrollmentDeviceBinding) {
     out.extend_from_slice(device.user_id.as_bytes());

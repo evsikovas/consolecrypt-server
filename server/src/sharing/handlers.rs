@@ -78,6 +78,8 @@ struct ListQuery {
     include_groups: bool,
     #[serde(default)]
     include_secrets: bool,
+    #[serde(default)]
+    include_kube_contexts: bool,
     #[serde(default = "page_limit")]
     limit: u32,
 }
@@ -95,6 +97,7 @@ async fn list(
             service::ListKinds {
                 include_groups: q.include_groups,
                 include_secrets: q.include_secrets,
+                include_kube_contexts: q.include_kube_contexts,
             },
         )
         .await?,
