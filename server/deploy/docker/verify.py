@@ -125,7 +125,7 @@ def main():
             assert request(origin, "/readyz").strip() == b"ready"
             meta = json.loads(request(origin, "/v1/meta"))
             assert meta["server_version"] == args.server_version
-            assert meta["protocol_version"] == "1.5"
+            assert meta["protocol_version"] == "1.6"
             assert meta["source_code_url"] == config.SOURCE
             assert meta["email_verification_required"] is True
             request(origin, "/v1/auth/me", 401)
