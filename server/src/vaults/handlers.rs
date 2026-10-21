@@ -251,10 +251,12 @@ pub async fn delete_vault(
 }
 
 /// `GET /v1/vaults/{vault_id}/envelopes`: trusted → all live envelopes;
-/// untrusted member → password + recovery + own device envelope.
+/// untrusted member → password + recovery + own device envelope, metered by
+/// device protection (`429 envelope_rate_limited`).
 pub async fn list_envelopes(
     State(state): State<AppState>,
     auth: AuthContext,
+    ClientIp(ip): ClientIp,
     ApiPath(vault_id): ApiPath<VaultId>,
 ) -> AppResult<Json<ListEnvelopesResponse>> {
     let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
@@ -266,6 +268,23 @@ pub async fn list_envelopes(
         }
     };
     let envelopes = envelopes::list_live(&state.db, vault_id, visibility).await?;
+    if !access.trusted
+        && envelopes.iter().any(|e| {
+            matches!(
+                e.recipient_type,
+                RecipientType::Password | RecipientType::Recovery
+            )
+        })
+    {
+        crate::devices::protection::meter_unlock_material(
+            &state,
+            &auth,
+            ip,
+            vault_id,
+            "vault_envelopes",
+        )
+        .await?;
+    }
     Ok(Json(ListEnvelopesResponse { envelopes }))
 }
 

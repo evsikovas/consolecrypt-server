@@ -15,7 +15,7 @@
 
 use crate::envelopes::RecipientType;
 use crate::ids::{DeviceId, DeviceRequestId, SessionId, VaultId};
-use crate::version::ProtocolVersion;
+use crate::version::{Platform, ProtocolVersion};
 use crate::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +42,15 @@ pub enum ServerEvent {
     },
     DeviceAdded {
         device_id: DeviceId,
+    },
+    /// A new device signed in to the account (protocol 1.7, only while
+    /// device protection is on). Sent in addition to `device_added`. Trusted
+    /// devices offer "Revoke" / "It's me".
+    DeviceRegistered {
+        device_id: DeviceId,
+        name: String,
+        platform: Platform,
+        created_at: Timestamp,
     },
     DeviceApprovalRequested {
         request_id: DeviceRequestId,
@@ -89,6 +98,24 @@ mod tests {
                 "latest_sequence": 1042
             })
         );
+    }
+
+    #[test]
+    fn device_registered_shape() {
+        let device_id = DeviceId::new();
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-21T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let e = ServerEvent::DeviceRegistered {
+            device_id,
+            name: "Laptop".into(),
+            platform: Platform::Linux,
+            created_at: at,
+        };
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["type"], "device_registered");
+        assert_eq!(v["platform"], "linux");
+        assert_eq!(serde_json::from_value::<ServerEvent>(v).unwrap(), e);
     }
 
     #[test]

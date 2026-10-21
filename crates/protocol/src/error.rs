@@ -27,6 +27,10 @@ pub enum ErrorCode {
     DeviceNotTrusted,
     /// 403 — account email not verified and the operation requires it.
     EmailNotVerified,
+    /// 403 — the calling device is new (device protection quarantine,
+    /// protocol 1.7) and may not act on trusted devices yet. `details.until`
+    /// is when the quarantine ends (RFC 3339).
+    DeviceInQuarantine,
     /// 404 — resource does not exist or is not visible to the caller
     /// (no distinction, to avoid IDOR probing).
     NotFound,
@@ -46,6 +50,9 @@ pub enum ErrorCode {
     UpgradeRequired,
     /// 429 — rate limited. See `retry_after_seconds`.
     RateLimited,
+    /// 429 — too many vault unlock envelopes were handed to devices that are
+    /// not trusted yet (protocol 1.7). See `retry_after_seconds`.
+    EnvelopeRateLimited,
     /// 500
     Internal,
     /// 503
@@ -62,14 +69,15 @@ impl ErrorCode {
             ErrorCode::Forbidden
             | ErrorCode::DeviceRevoked
             | ErrorCode::DeviceNotTrusted
-            | ErrorCode::EmailNotVerified => 403,
+            | ErrorCode::EmailNotVerified
+            | ErrorCode::DeviceInQuarantine => 403,
             ErrorCode::NotFound => 404,
             ErrorCode::Conflict | ErrorCode::AlreadyExists => 409,
             ErrorCode::Gone => 410,
             ErrorCode::PayloadTooLarge => 413,
             ErrorCode::InvalidProof => 422,
             ErrorCode::UpgradeRequired => 426,
-            ErrorCode::RateLimited => 429,
+            ErrorCode::RateLimited | ErrorCode::EnvelopeRateLimited => 429,
             ErrorCode::Internal => 500,
             ErrorCode::Unavailable => 503,
         }
@@ -79,7 +87,10 @@ impl ErrorCode {
     pub const fn is_retryable(&self) -> bool {
         matches!(
             self,
-            ErrorCode::RateLimited | ErrorCode::Internal | ErrorCode::Unavailable
+            ErrorCode::RateLimited
+                | ErrorCode::EnvelopeRateLimited
+                | ErrorCode::Internal
+                | ErrorCode::Unavailable
         )
     }
 }
@@ -125,5 +136,16 @@ mod tests {
         assert_eq!(v["code"], "device_not_trusted");
         assert!(v.get("details").is_none());
         assert_eq!(ErrorCode::DeviceNotTrusted.http_status(), 403);
+    }
+
+    #[test]
+    fn device_protection_codes_1_7() {
+        let v = serde_json::to_value(ErrorCode::DeviceInQuarantine).unwrap();
+        assert_eq!(v, "device_in_quarantine");
+        assert_eq!(ErrorCode::DeviceInQuarantine.http_status(), 403);
+        let v = serde_json::to_value(ErrorCode::EnvelopeRateLimited).unwrap();
+        assert_eq!(v, "envelope_rate_limited");
+        assert_eq!(ErrorCode::EnvelopeRateLimited.http_status(), 429);
+        assert!(ErrorCode::EnvelopeRateLimited.is_retryable());
     }
 }

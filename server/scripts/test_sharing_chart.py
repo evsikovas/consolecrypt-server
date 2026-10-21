@@ -73,5 +73,29 @@ class SharingChartTests(unittest.TestCase):
                     self.assertIn("must be a boolean", result.stderr)
 
 
+class DeviceProtectionChartTests(unittest.TestCase):
+    def env(self, result, name):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        match = re.search(r'^  ' + name + r': "([^"]*)"$', result.stdout, re.M)
+        return match and match.group(1)
+
+    def test_off_by_default_and_with_reused_old_values(self):
+        for config in [{}, {"deviceProtection": None}, {"deviceProtection": {"enabled": None}}]:
+            with self.subTest(config=config):
+                self.assertEqual(self.env(render(config), "CC_DEVICE_PROTECTION_ENABLED"), "false")
+
+    def test_enabled_with_limits(self):
+        result = render({"deviceProtection": {"enabled": True, "quarantineDays": 7,
+                                              "envelopesPerAccountPerHour": 2}})
+        self.assertEqual(self.env(result, "CC_DEVICE_PROTECTION_ENABLED"), "true")
+        self.assertEqual(self.env(result, "CC_DEVICE_QUARANTINE_DAYS"), "7")
+        self.assertEqual(self.env(result, "CC_ENVELOPE_LIMIT_ACCOUNT_PER_HOUR"), "2")
+
+    def test_rejects_non_boolean(self):
+        result = render({"deviceProtection": {"enabled": "true"}})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be a boolean", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

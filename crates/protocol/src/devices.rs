@@ -16,6 +16,15 @@
 //!   3. proving knowledge of V's root key via the vault access key
 //!      ([`AttestDeviceRequest`]) after unlocking with the Vault passphrase or
 //!      Recovery Key.
+//!
+//! **New-device protection** (protocol 1.7, ADR-0004 amendment after the
+//! 2026-10-21 security audit; only while the server advertises
+//! `capabilities.device_protection`): an active device is not yet as
+//! powerful as a trusted one. A device younger than the server's quarantine
+//! ([`DeviceInfo::quarantine_until`]) may revoke only itself and untrusted
+//! devices and cannot sign out trusted devices, even after it unlocked a
+//! vault; approval by a trusted device past quarantine ends it early. The
+//! device that registered the account never starts in quarantine.
 
 use crate::bytes::Bytes;
 use crate::envelopes::NewEnvelope;
@@ -146,6 +155,15 @@ pub struct DeviceInfo {
     /// True for the device that made this request.
     #[serde(default)]
     pub is_current: bool,
+    /// Holds a live device envelope for at least one vault (protocol 1.7).
+    /// Older servers omit it; derive it from `trusted_vaults` then.
+    #[serde(default)]
+    pub trusted: bool,
+    /// While set, the device is new and may not revoke trusted devices,
+    /// sign them out or have its password change sign them out
+    /// (protocol 1.7, device protection only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantine_until: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,13 +256,39 @@ pub struct AttestDeviceRequest {
 /// `POST /v1/devices/{id}/revoke` → `204`. Emits `device_revoked`.
 ///
 /// Allowed for any active device of the account (a stolen laptop must be
-/// revocable even if every other trusted device is lost). Revocation kills
+/// revocable even if every other trusted device is lost), with one
+/// exception since protocol 1.7: while device protection is on, a device in
+/// quarantine (see [`DeviceInfo::quarantine_until`]) may revoke only itself
+/// and devices that are not trusted; revoking a trusted device answers
+/// `403 device_in_quarantine` with `details.until`. Revocation kills
 /// the device's sessions and revokes its device envelopes. It cannot erase
 /// what the device already decrypted — see the threat model on key rotation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RevokeDeviceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// `POST /v1/devices/deny` (unauthenticated, protocol 1.7) — the "This
+/// wasn't me" link of a security mail. The single-use token revokes only the
+/// device (or, after a password reset, the untrusted devices) it was issued
+/// for, never a trusted device. Invalid, used or expired → `400 bad_request`;
+/// the device became trusted meanwhile → `403 forbidden` with
+/// `details.reason = "device_trusted"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DenyDeviceRequest {
+    pub token: crate::auth::SecretString,
+}
+
+/// Result of [`DenyDeviceRequest`]. Reveals nothing about the account except
+/// the names of the revoked devices.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DenyDeviceResponse {
+    /// Devices revoked by this call (may be empty when already revoked).
+    pub revoked_device_names: Vec<String>,
+    /// The device had already been revoked before.
+    #[serde(default)]
+    pub already_revoked: bool,
 }
 
 /// `PATCH /v1/devices/{id}` — rename.
