@@ -19,6 +19,8 @@ pub const DEVICE_APPROVE: &str = "/v1/devices/{device_id}/approve";
 pub const DEVICE_REJECT: &str = "/v1/devices/{device_id}/reject";
 pub const DEVICE_ATTEST: &str = "/v1/devices/{device_id}/attest";
 pub const DEVICE_REVOKE: &str = "/v1/devices/{device_id}/revoke";
+/// Unauthenticated "This wasn't me" link from a security mail (protocol 1.7).
+pub const DEVICES_DENY: &str = "/v1/devices/deny";
 
 pub const VAULTS: &str = "/v1/vaults";
 pub const VAULT: &str = "/v1/vaults/{vault_id}";

@@ -52,6 +52,8 @@ pub struct MaintenanceReport {
     pub refresh_tokens_deleted: u64,
     pub account_tokens_deleted: u64,
     pub login_nonces_deleted: u64,
+    /// Expired "This wasn't me" tokens, rate counters and issuance markers.
+    pub protection_rows_deleted: u64,
     pub sync_mutations_deleted: u64,
     pub vaults_purged: u64,
     pub audit_events_deleted: u64,
@@ -153,6 +155,17 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<MaintenanceReport> {
                 .execute(&mut *conn)
                 .await?
                 .rows_affected();
+
+        // Device protection: windows are at most a day long; deny tokens
+        // live 7 days and are kept one more day for support questions.
+        for sql in [
+            "DELETE FROM device_deny_tokens WHERE expires_at < now() - interval '1 day'",
+            "DELETE FROM rate_counters WHERE window_start < now() - interval '2 days'",
+            "DELETE FROM envelope_issuances WHERE window_start < now() - interval '2 days'",
+        ] {
+            report.protection_rows_deleted +=
+                sqlx::query(sql).execute(&mut *conn).await?.rows_affected();
+        }
 
         if r.sync_mutation_days > 0 {
             report.sync_mutations_deleted = sqlx::query(

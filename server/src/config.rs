@@ -63,6 +63,8 @@ pub struct Config {
     pub hsts: bool,
     pub password_hashing: PasswordHashingConfig,
     pub rate_limits: RateLimitConfig,
+    /// New-device protection (security audit S1, protocol 1.7).
+    pub device_protection: DeviceProtectionConfig,
     pub mail: MailConfig,
     /// Byte budget of one `changes`/`snapshot` page.
     pub sync_page_bytes: usize,
@@ -114,6 +116,34 @@ pub struct RateLimitConfig {
     pub recovery_per_email_per_hour: u32,
     /// Attest / approve attempts per device per minute.
     pub proof_per_device_per_minute: u32,
+}
+
+/// New-device protection: quarantine, envelope hand-out limits for untrusted
+/// devices, security mails and the `device_registered` event. Off by default
+/// so an upgraded server behaves exactly as before until the operator opts in.
+#[derive(Debug, Clone)]
+pub struct DeviceProtectionConfig {
+    pub enabled: bool,
+    /// "New device" mails (requires `enabled`; the "This wasn't me" link
+    /// needs the web account page at `CC_PUBLIC_URL/account`).
+    pub new_device_mail: bool,
+    /// How long a new device may not act on trusted devices.
+    pub quarantine: Duration,
+    /// Unlock envelopes handed to all untrusted devices of an account (0 = no limit).
+    pub envelopes_per_account_per_hour: u32,
+    pub envelopes_per_account_per_day: u32,
+    /// Unlock envelopes handed to one untrusted device (0 = no limit).
+    pub envelopes_per_device_per_hour: u32,
+    /// "New device" mails per account per hour; later sign-ins of that hour
+    /// are folded into one summary mail.
+    pub new_device_mails_per_hour: u32,
+}
+
+impl DeviceProtectionConfig {
+    /// Quarantine as a chrono duration (bounded by config validation).
+    pub fn quarantine_span(&self) -> chrono::Duration {
+        chrono::Duration::from_std(self.quarantine).unwrap_or(chrono::Duration::days(14))
+    }
 }
 
 #[derive(Clone)]
@@ -333,6 +363,48 @@ impl Config {
                     20,
                 )?,
             },
+            device_protection: DeviceProtectionConfig {
+                enabled: parse_bool(
+                    get("CC_DEVICE_PROTECTION_ENABLED"),
+                    "CC_DEVICE_PROTECTION_ENABLED",
+                    false,
+                )?,
+                new_device_mail: parse_bool(
+                    get("CC_NEW_DEVICE_MAIL_ENABLED"),
+                    "CC_NEW_DEVICE_MAIL_ENABLED",
+                    true,
+                )?,
+                quarantine: Duration::from_secs(
+                    u64::from(parse_or::<u32>(
+                        get("CC_DEVICE_QUARANTINE_DAYS"),
+                        "CC_DEVICE_QUARANTINE_DAYS",
+                        14,
+                    )?)
+                    .min(10_000)
+                        * 24
+                        * 3600,
+                ),
+                envelopes_per_account_per_hour: parse_or(
+                    get("CC_ENVELOPE_LIMIT_ACCOUNT_PER_HOUR"),
+                    "CC_ENVELOPE_LIMIT_ACCOUNT_PER_HOUR",
+                    5,
+                )?,
+                envelopes_per_account_per_day: parse_or(
+                    get("CC_ENVELOPE_LIMIT_ACCOUNT_PER_DAY"),
+                    "CC_ENVELOPE_LIMIT_ACCOUNT_PER_DAY",
+                    20,
+                )?,
+                envelopes_per_device_per_hour: parse_or(
+                    get("CC_ENVELOPE_LIMIT_DEVICE_PER_HOUR"),
+                    "CC_ENVELOPE_LIMIT_DEVICE_PER_HOUR",
+                    3,
+                )?,
+                new_device_mails_per_hour: parse_or(
+                    get("CC_NEW_DEVICE_MAIL_PER_HOUR"),
+                    "CC_NEW_DEVICE_MAIL_PER_HOUR",
+                    10,
+                )?,
+            },
             mail: MailConfig {
                 transport: mail_transport,
                 from: get("CC_MAIL_FROM")
@@ -406,6 +478,9 @@ impl Config {
             && (!self.object_sharing_enabled || !self.require_request_proof)
         {
             return err("own-device enrollment requires object sharing and strict request proofs");
+        }
+        if self.device_protection.quarantine > Duration::from_secs(365 * 24 * 3600) {
+            return err("CC_DEVICE_QUARANTINE_DAYS must be between 0 and 365");
         }
         let r = &self.retention;
         for (name, days) in [
@@ -535,6 +610,7 @@ impl fmt::Debug for Config {
             .field("metrics_listen", &self.metrics_listen)
             .field("log_format", &self.log_format)
             .field("rate_limits", &self.rate_limits)
+            .field("device_protection", &self.device_protection)
             .field("mail", &self.mail)
             .field("maintenance_interval", &self.maintenance_interval)
             .field("retention", &self.retention)
@@ -618,6 +694,41 @@ mod tests {
         assert!(cfg(&[db, ("CC_WS_SESSION_RECHECK_SECS", "300")]).is_err());
         assert!(cfg(&[db, ("CC_ACCESS_TOKEN_TTL_SECS", "5")]).is_err());
         assert!(cfg(&[db, ("CC_RETENTION_AUDIT_DAYS", "0")]).is_ok());
+    }
+
+    #[test]
+    fn device_protection_is_opt_in_with_spec_defaults() {
+        let db = ("CC_DATABASE_URL", "x");
+        let c = cfg(&[db]).unwrap();
+        let p = &c.device_protection;
+        assert!(!p.enabled);
+        assert!(p.new_device_mail);
+        assert_eq!(p.quarantine, Duration::from_secs(14 * 24 * 3600));
+        assert_eq!(
+            (
+                p.envelopes_per_account_per_hour,
+                p.envelopes_per_account_per_day,
+                p.envelopes_per_device_per_hour,
+                p.new_device_mails_per_hour
+            ),
+            (5, 20, 3, 10)
+        );
+        let c = cfg(&[
+            db,
+            ("CC_DEVICE_PROTECTION_ENABLED", "true"),
+            ("CC_DEVICE_QUARANTINE_DAYS", "7"),
+            ("CC_ENVELOPE_LIMIT_DEVICE_PER_HOUR", "0"),
+        ])
+        .unwrap();
+        assert!(c.device_protection.enabled);
+        assert_eq!(
+            c.device_protection.quarantine_span(),
+            chrono::Duration::days(7)
+        );
+        assert_eq!(c.device_protection.envelopes_per_device_per_hour, 0);
+        assert!(cfg(&[db, ("CC_DEVICE_QUARANTINE_DAYS", "366")]).is_err());
+        assert!(cfg(&[db, ("CC_DEVICE_QUARANTINE_DAYS", "-1")]).is_err());
+        assert!(cfg(&[db, ("CC_DEVICE_PROTECTION_ENABLED", "maybe")]).is_err());
     }
 
     #[test]

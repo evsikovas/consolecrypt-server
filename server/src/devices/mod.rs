@@ -4,7 +4,10 @@
 //! Devices and device trust (`/v1/devices/*`, ADR-0004).
 
 pub mod handlers;
+pub mod protection;
 
+use crate::auth::sessions;
+use crate::config::DeviceProtectionConfig;
 use crate::crypto;
 use crate::error::{is_unique_violation, AppError, AppResult};
 use crate::util::{enum_str, parse_enum, short_text, validate_device_name};
@@ -13,7 +16,7 @@ use cc_protocol::devices::{
     DeviceTrustRequest,
 };
 use cc_protocol::{canonical, limits};
-use cc_protocol::{DeviceId, DeviceRequestId, UserId, VaultId};
+use cc_protocol::{DeviceId, DeviceRequestId, SessionId, UserId, VaultId};
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor};
 use std::collections::HashMap;
@@ -195,10 +198,11 @@ pub(crate) struct DeviceRow {
     pub created_at: DateTime<Utc>,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+    pub quarantine_lifted_at: Option<DateTime<Utc>>,
 }
 
 const DEVICE_COLUMNS: &str = "id, name, platform, encryption_public_key, signing_public_key, \
-                              created_at, last_seen_at, revoked_at";
+                              created_at, last_seen_at, revoked_at, quarantine_lifted_at";
 
 /// Map device id → vaults it currently holds a live device envelope for
 /// (excluding deleted vaults).
@@ -224,7 +228,18 @@ async fn trusted_vaults<'e>(
     Ok(map)
 }
 
-fn to_info(row: DeviceRow, trusted: Vec<VaultId>, current: DeviceId) -> AppResult<DeviceInfo> {
+fn to_info(
+    row: DeviceRow,
+    trusted: Vec<VaultId>,
+    current: DeviceId,
+    prot: &DeviceProtectionConfig,
+) -> AppResult<DeviceInfo> {
+    let quarantine_until = protection::quarantine_end(
+        prot,
+        row.created_at,
+        row.quarantine_lifted_at,
+        row.revoked_at,
+    );
     Ok(DeviceInfo {
         device_id: row.id.into(),
         name: row.name,
@@ -236,17 +251,20 @@ fn to_info(row: DeviceRow, trusted: Vec<VaultId>, current: DeviceId) -> AppResul
         } else {
             DeviceStatus::Active
         },
-        trusted_vaults: trusted,
         created_at: row.created_at,
         last_seen_at: row.last_seen_at,
         revoked_at: row.revoked_at,
         is_current: row.id == Uuid::from(current),
+        trusted: !trusted.is_empty(),
+        quarantine_until,
+        trusted_vaults: trusted,
     })
 }
 
 /// All devices of `user_id` (including revoked ones), oldest first.
 pub(crate) async fn list_device_infos(
     db: &sqlx::PgPool,
+    prot: &DeviceProtectionConfig,
     user_id: UserId,
     current: DeviceId,
 ) -> AppResult<Vec<DeviceInfo>> {
@@ -261,7 +279,7 @@ pub(crate) async fn list_device_infos(
     rows.into_iter()
         .map(|r| {
             let t = trusted.remove(&r.id).unwrap_or_default();
-            to_info(r, t, current)
+            to_info(r, t, current, prot)
         })
         .collect()
 }
@@ -269,6 +287,7 @@ pub(crate) async fn list_device_infos(
 /// One device of `user_id`, or `404`.
 pub(crate) async fn device_info(
     db: &sqlx::PgPool,
+    prot: &DeviceProtectionConfig,
     user_id: UserId,
     device_id: DeviceId,
     current: DeviceId,
@@ -283,7 +302,7 @@ pub(crate) async fn device_info(
     let row = row.ok_or_else(AppError::not_found)?;
     let mut trusted = trusted_vaults(db, &[row.id]).await?;
     let t = trusted.remove(&row.id).unwrap_or_default();
-    to_info(row, t, current)
+    to_info(row, t, current, prot)
 }
 
 #[derive(sqlx::FromRow)]
@@ -318,6 +337,7 @@ fn effective_status(status: &str, expires_at: DateTime<Utc>) -> AppResult<Device
 /// Live (pending, unexpired) trust requests of `user_id`.
 pub(crate) async fn pending_requests(
     db: &sqlx::PgPool,
+    prot: &DeviceProtectionConfig,
     user_id: UserId,
     current: DeviceId,
 ) -> AppResult<Vec<DeviceTrustRequest>> {
@@ -331,7 +351,7 @@ pub(crate) async fn pending_requests(
     .await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let device = device_info(db, user_id, row.device_id.into(), current).await?;
+        let device = device_info(db, prot, user_id, row.device_id.into(), current).await?;
         out.push(request_to_dto(row, device)?);
     }
     Ok(out)
@@ -340,6 +360,7 @@ pub(crate) async fn pending_requests(
 /// One trust request of `user_id`, or `404`.
 pub(crate) async fn trust_request(
     db: &sqlx::PgPool,
+    prot: &DeviceProtectionConfig,
     user_id: UserId,
     request_id: DeviceRequestId,
     current: DeviceId,
@@ -352,7 +373,7 @@ pub(crate) async fn trust_request(
     .fetch_optional(db)
     .await?;
     let row = row.ok_or_else(AppError::not_found)?;
-    let device = device_info(db, user_id, row.device_id.into(), current).await?;
+    let device = device_info(db, prot, user_id, row.device_id.into(), current).await?;
     request_to_dto(row, device)
 }
 
@@ -365,6 +386,47 @@ fn request_to_dto(row: RequestRow, device: DeviceInfo) -> AppResult<DeviceTrustR
         created_at: row.created_at,
         expires_at: row.expires_at,
         approved_by_device_id: row.approved_by_device_id.map(DeviceId::from),
+    })
+}
+
+/// What [`revoke_locked`] revoked.
+pub(crate) struct Revocation {
+    pub sessions: Vec<SessionId>,
+    pub envelopes: u64,
+}
+
+/// Revoke a device whose row the caller has locked `FOR UPDATE` and found
+/// active: its sessions, device envelopes and pending trust requests.
+pub(crate) async fn revoke_locked(
+    conn: &mut PgConnection,
+    device_id: DeviceId,
+    reason: Option<&str>,
+    session_reason: &str,
+) -> AppResult<Revocation> {
+    sqlx::query("UPDATE devices SET revoked_at = now(), revoke_reason = $2 WHERE id = $1")
+        .bind(Uuid::from(device_id))
+        .bind(reason)
+        .execute(&mut *conn)
+        .await?;
+    let sessions = sessions::revoke_device_sessions(conn, device_id, session_reason).await?;
+    let envelopes = sqlx::query(
+        "UPDATE vault_key_envelopes SET revoked_at = now(), revoke_reason = 'device_revoked'
+          WHERE recipient_type = 'device' AND recipient_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(Uuid::from(device_id))
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    sqlx::query(
+        "UPDATE device_requests SET status = 'rejected', decided_at = now()
+          WHERE device_id = $1 AND status = 'pending'",
+    )
+    .bind(Uuid::from(device_id))
+    .execute(&mut *conn)
+    .await?;
+    Ok(Revocation {
+        sessions,
+        envelopes,
     })
 }
 

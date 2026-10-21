@@ -6,7 +6,7 @@
 use super::sessions::{self, AccountTokenPurpose};
 use super::AuthContext;
 use crate::audit::{AuditEvent, AuditType};
-use crate::devices::{self, DeviceOutcome};
+use crate::devices::{self, protection, DeviceOutcome};
 use crate::error::{is_unique_violation, spawn_in_request, AppError, AppResult};
 use crate::extract::{ApiJson, ApiJsonOrDefault, ClientIp};
 use crate::mail::{self, templates};
@@ -14,15 +14,16 @@ use crate::state::AppState;
 use crate::util::{email_key, normalize_email, validate_account_password};
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use cc_protocol::auth::{
     AccountInfo, AuthResponse, ChangePasswordRequest, ForgotPasswordRequest, LoginRequest,
-    LogoutRequest, RefreshRequest, RegisterRequest, ResetPasswordRequest, TokenPair,
-    VerifyEmailRequest,
+    LogoutRequest, LogoutResponse, RefreshRequest, RegisterRequest, ResetPasswordRequest,
+    TokenPair, VerifyEmailRequest,
 };
 use cc_protocol::devices::DeviceStatus;
 use cc_protocol::events::ServerEvent;
-use cc_protocol::{ErrorCode, UserId};
+use cc_protocol::{DeviceId, ErrorCode, UserId};
 use chrono::{DateTime, Utc};
 use std::net::IpAddr;
 use uuid::Uuid;
@@ -63,6 +64,12 @@ pub async fn register(
         }
     }
     devices::register_or_match(&mut tx, user_id, &req.device, req.device_proof.as_ref()).await?;
+    // The device that creates the account is the owner's by definition: it
+    // never starts in quarantine (device protection).
+    sqlx::query("UPDATE devices SET quarantine_lifted_at = created_at WHERE id = $1")
+        .bind(Uuid::from(device_id))
+        .execute(&mut *tx)
+        .await?;
     let tokens = sessions::create_session(&mut tx, &state.config, user_id, device_id).await?;
     AuditEvent::new(AuditType::Register)
         .user(user_id)
@@ -230,6 +237,7 @@ pub async fn login(
             .events
             .publish_user(user_id, ServerEvent::DeviceAdded { device_id })
             .await;
+        protection::on_device_created(&state, user_id, &req.device, ip).await;
     }
     Ok(Json(AuthResponse {
         user_id,
@@ -274,36 +282,87 @@ pub async fn refresh(
         .map(Json)
 }
 
-/// `POST /v1/auth/logout` → `204`
+/// `POST /v1/auth/logout` → `204`. `all_sessions` from a device in
+/// quarantine (TR-6) keeps trusted devices signed in and answers `200`
+/// [`LogoutResponse`] saying so.
 pub async fn logout(
     State(state): State<AppState>,
     auth: AuthContext,
     ClientIp(ip): ClientIp,
     ApiJsonOrDefault(req): ApiJsonOrDefault<LogoutRequest>,
-) -> AppResult<StatusCode> {
+) -> AppResult<Response> {
     let mut tx = state.db.begin().await?;
-    let revoked = if req.all_sessions {
+    let quarantine = if req.all_sessions {
+        protection::quarantine_of(&mut *tx, &state.config.device_protection, auth.device_id).await?
+    } else {
+        None
+    };
+    let revoked = if req.all_sessions && quarantine.is_some() {
+        sessions::revoke_untrusted_sessions(
+            &mut tx,
+            auth.user_id,
+            auth.device_id,
+            None,
+            "logout_all",
+        )
+        .await?
+    } else if req.all_sessions {
         sessions::revoke_user_sessions(&mut tx, auth.user_id, None, "logout_all").await?
     } else if sessions::revoke_session(&mut tx, auth.session_id, "logout").await? {
         vec![auth.session_id]
     } else {
         vec![]
     };
+    let trusted_kept = match quarantine {
+        Some(_) => trusted_devices_besides(&mut tx, auth.user_id, auth.device_id).await?,
+        None => 0,
+    };
     AuditEvent::new(AuditType::Logout)
         .user(auth.user_id)
         .device(auth.device_id)
         .ip(ip)
-        .meta(serde_json::json!({ "all_sessions": req.all_sessions, "sessions": revoked.len() }))
+        .meta(serde_json::json!({
+            "all_sessions": req.all_sessions,
+            "sessions": revoked.len(),
+            "quarantine": quarantine.is_some(),
+        }))
         .record(&mut *tx)
         .await?;
     tx.commit().await?;
+    let count = revoked.len();
     for session_id in revoked {
         state
             .events
             .publish_user(auth.user_id, ServerEvent::SessionRevoked { session_id })
             .await;
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(match quarantine {
+        Some(until) => Json(LogoutResponse {
+            sessions_revoked: u32::try_from(count).unwrap_or(u32::MAX),
+            trusted_devices_kept: trusted_kept,
+            quarantine_until: Some(until),
+        })
+        .into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
+}
+
+/// Active trusted devices of `user_id` other than `device_id`.
+async fn trusted_devices_besides(
+    conn: &mut sqlx::PgConnection,
+    user_id: UserId,
+    device_id: DeviceId,
+) -> AppResult<u32> {
+    let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM devices d
+          WHERE d.user_id = $1 AND d.id <> $2 AND d.revoked_at IS NULL AND {}",
+        protection::trusted_sql("d.id")
+    )))
+    .bind(Uuid::from(user_id))
+    .bind(Uuid::from(device_id))
+    .fetch_one(conn)
+    .await?;
+    Ok(u32::try_from(n).unwrap_or(u32::MAX))
 }
 
 #[derive(sqlx::FromRow)]
@@ -441,8 +500,11 @@ pub async fn recovery_confirm(
     complete_password_reset(&state, ip, req, true).await
 }
 
-/// Sets a new account password and revokes every session. Vault ciphertext,
-/// envelopes and device trust are untouched.
+/// Sets a new account password and revokes every session and every other
+/// pending reset/verification token (TR-12). With device protection, devices
+/// that never unlocked a vault are revoked too (TR-11) and the owner gets a
+/// mail listing them with a "This wasn't me" link (TR-13). Vault ciphertext,
+/// envelopes and the trust of trusted devices are untouched.
 async fn complete_password_reset(
     state: &AppState,
     ip: Option<IpAddr>,
@@ -455,23 +517,54 @@ async fn complete_password_reset(
     sessions::check_account_token(&state.db, &req.token, AccountTokenPurpose::PasswordReset)
         .await?;
     let password_hash = state.passwords.hash(&req.new_password).await?;
+    let prot = &state.config.device_protection;
 
     let mut tx = state.db.begin().await?;
     let user_id =
         sessions::consume_account_token(&mut tx, &req.token, AccountTokenPurpose::PasswordReset)
             .await?;
     // A reset proves control of the mailbox, so it also verifies the email.
-    sqlx::query(
+    let email: String = sqlx::query_scalar(
         "UPDATE users
             SET password_hash = $2, password_changed_at = now(), updated_at = now(),
                 email_verified_at = COALESCE(email_verified_at, now())
-          WHERE id = $1",
+          WHERE id = $1
+          RETURNING email",
     )
     .bind(Uuid::from(user_id))
     .bind(&password_hash)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
-    let revoked = sessions::revoke_user_sessions(&mut tx, user_id, None, "password_reset").await?;
+    let mut revoked_devices: Vec<(Uuid, String)> = Vec::new();
+    let mut revoked = Vec::new();
+    if prot.enabled {
+        let never_trusted: Vec<(Uuid, String)> = sqlx::query_as(
+            "SELECT id, name FROM devices
+              WHERE user_id = $1 AND revoked_at IS NULL AND first_trusted_at IS NULL
+              ORDER BY created_at FOR UPDATE",
+        )
+        .bind(Uuid::from(user_id))
+        .fetch_all(&mut *tx)
+        .await?;
+        for (id, name) in never_trusted {
+            let r = devices::revoke_locked(
+                &mut tx,
+                id.into(),
+                Some("password_reset"),
+                "password_reset",
+            )
+            .await?;
+            revoked.extend(r.sessions);
+            revoked_devices.push((id, name));
+        }
+    }
+    revoked.extend(sessions::revoke_user_sessions(&mut tx, user_id, None, "password_reset").await?);
+    let tokens_invalidated = sessions::invalidate_account_tokens(&mut tx, user_id, true).await?;
+    let deny_token = if prot.enabled && state.mailer.delivers() {
+        Some(protection::issue_deny_token(&mut tx, user_id, None).await?)
+    } else {
+        None
+    };
     AuditEvent::new(if recovery {
         AuditType::AccountRecoveryCompleted
     } else {
@@ -479,7 +572,11 @@ async fn complete_password_reset(
     })
     .user(user_id)
     .ip(ip)
-    .meta(serde_json::json!({ "sessions_revoked": revoked.len() }))
+    .meta(serde_json::json!({
+        "sessions_revoked": revoked.len(),
+        "devices_revoked": revoked_devices.len(),
+        "tokens_invalidated": tokens_invalidated,
+    }))
     .record(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -487,16 +584,41 @@ async fn complete_password_reset(
     if recovery {
         metrics::counter!("cc_recovery_attempts_total", "kind" => "account_confirm").increment(1);
     }
+    for (id, _) in &revoked_devices {
+        state
+            .events
+            .publish_user(
+                user_id,
+                ServerEvent::DeviceRevoked {
+                    device_id: (*id).into(),
+                },
+            )
+            .await;
+    }
     for session_id in revoked {
         state
             .events
             .publish_user(user_id, ServerEvent::SessionRevoked { session_id })
             .await;
     }
+    if let Some(token) = deny_token {
+        let names: Vec<String> = revoked_devices.into_iter().map(|(_, n)| n).collect();
+        mail::send_in_background(
+            state.mailer.clone(),
+            templates::password_reset_completed(
+                &email,
+                &names,
+                token.token.expose_secret(),
+                state.config.public_url.as_deref(),
+            ),
+        );
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /v1/auth/password/change` → `204`. Other sessions are revoked.
+/// `POST /v1/auth/password/change` → `204`. Other sessions and pending reset
+/// tokens are revoked; from a device in quarantine (TR-7) sessions of trusted
+/// devices are kept and the owner gets a "This wasn't me" mail.
 pub async fn change_password(
     State(state): State<AppState>,
     auth: AuthContext,
@@ -532,18 +654,53 @@ pub async fn change_password(
     .bind(&new_hash)
     .execute(&mut *tx)
     .await?;
-    let revoked = sessions::revoke_user_sessions(
-        &mut tx,
-        auth.user_id,
-        Some(auth.session_id),
-        "password_changed",
-    )
-    .await?;
+    let quarantine =
+        protection::quarantine_of(&mut *tx, &state.config.device_protection, auth.device_id)
+            .await?;
+    let revoked = if quarantine.is_some() {
+        sessions::revoke_untrusted_sessions(
+            &mut tx,
+            auth.user_id,
+            auth.device_id,
+            Some(auth.session_id),
+            "password_changed",
+        )
+        .await?
+    } else {
+        sessions::revoke_user_sessions(
+            &mut tx,
+            auth.user_id,
+            Some(auth.session_id),
+            "password_changed",
+        )
+        .await?
+    };
+    sessions::invalidate_account_tokens(&mut tx, auth.user_id, false).await?;
+    let notice = match quarantine {
+        Some(_) => {
+            let name: String = sqlx::query_scalar("SELECT name FROM devices WHERE id = $1")
+                .bind(Uuid::from(auth.device_id))
+                .fetch_one(&mut *tx)
+                .await?;
+            let token =
+                protection::issue_deny_token(&mut tx, auth.user_id, Some(auth.device_id)).await?;
+            templates::password_changed_new_device(
+                &email,
+                &name,
+                token.token.expose_secret(),
+                state.config.public_url.as_deref(),
+            )
+        }
+        None => templates::password_changed(&email, state.config.public_url.as_deref()),
+    };
     AuditEvent::new(AuditType::PasswordChanged)
         .user(auth.user_id)
         .device(auth.device_id)
         .ip(ip)
-        .meta(serde_json::json!({ "sessions_revoked": revoked.len() }))
+        .meta(serde_json::json!({
+            "sessions_revoked": revoked.len(),
+            "quarantine": quarantine.is_some(),
+        }))
         .record(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -554,10 +711,7 @@ pub async fn change_password(
             .publish_user(auth.user_id, ServerEvent::SessionRevoked { session_id })
             .await;
     }
-    mail::send_in_background(
-        state.mailer.clone(),
-        templates::password_changed(&email, state.config.public_url.as_deref()),
-    );
+    mail::send_in_background(state.mailer.clone(), notice);
     Ok(StatusCode::NO_CONTENT)
 }
 

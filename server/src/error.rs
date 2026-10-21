@@ -158,6 +158,25 @@ impl AppError {
         }
     }
 
+    /// `403 device_in_quarantine` with `details.until` (protocol 1.7).
+    pub fn device_in_quarantine(until: chrono::DateTime<chrono::Utc>) -> Self {
+        Self::new(
+            ErrorCode::DeviceInQuarantine,
+            "this device is new and cannot act on trusted devices yet",
+        )
+        .with_details(serde_json::json!({ "until": until }))
+    }
+
+    /// `429 envelope_rate_limited` (protocol 1.7).
+    pub fn envelope_rate_limited(retry_after_seconds: u32) -> Self {
+        AppError::Api {
+            code: ErrorCode::EnvelopeRateLimited,
+            message: "too many vault unlock requests from untrusted devices".into(),
+            details: None,
+            retry_after_seconds: Some(retry_after_seconds.max(1)),
+        }
+    }
+
     pub fn internal(message: &'static str) -> Self {
         AppError::Internal(anyhow::anyhow!(message))
     }

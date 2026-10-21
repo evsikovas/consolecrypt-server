@@ -51,6 +51,8 @@ pub enum TokenKind {
     Refresh,
     /// Single-use account tokens (password reset, email verification).
     Account,
+    /// Single-use "This wasn't me" links of security mails (protocol 1.7).
+    DenyDevice,
 }
 
 impl TokenKind {
@@ -59,6 +61,7 @@ impl TokenKind {
             TokenKind::Access => "cca_",
             TokenKind::Refresh => "ccr_",
             TokenKind::Account => "cct_",
+            TokenKind::DenyDevice => "ccd_",
         }
     }
 }

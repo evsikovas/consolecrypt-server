@@ -101,8 +101,11 @@ pub async fn store(
     .bind(env.ciphertext.as_slice())
     .bind(env.nonce.as_slice())
     .bind(Uuid::from(created_by))
-    .fetch_one(conn)
+    .fetch_one(&mut *conn)
     .await?;
+    if let (RecipientType::Device, Some(device)) = (env.recipient_type, env.recipient_id) {
+        crate::devices::protection::mark_trusted(conn, device).await?;
+    }
     row.into_dto()
 }
 

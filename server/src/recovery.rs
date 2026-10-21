@@ -23,13 +23,16 @@ use cc_protocol::recovery::{RecoveryMaterialQuery, ReplaceEnvelopeRequest, Vault
 use std::net::IpAddr;
 use uuid::Uuid;
 
-/// `GET /v1/recovery/vault/envelope?vault_id` — any active device of a member.
+/// `GET /v1/recovery/vault/envelope?vault_id` — any active device of a
+/// member; for a device not trusted for the vault metered by device
+/// protection (`429 envelope_rate_limited`).
 pub async fn vault_material(
     State(state): State<AppState>,
     auth: AuthContext,
+    ClientIp(ip): ClientIp,
     ApiQuery(q): ApiQuery<RecoveryMaterialQuery>,
 ) -> AppResult<Json<VaultRecoveryMaterial>> {
-    VaultAccess::load(&state.db, &auth, q.vault_id).await?;
+    let access = VaultAccess::load(&state.db, &auth, q.vault_id).await?;
     let password_envelope =
         envelopes::live_for(&state.db, q.vault_id, RecipientType::Password, None).await?;
     let recovery_envelope =
@@ -41,6 +44,16 @@ pub async fn vault_material(
         Some(auth.device_id.into()),
     )
     .await?;
+    if !access.trusted && (password_envelope.is_some() || recovery_envelope.is_some()) {
+        crate::devices::protection::meter_unlock_material(
+            &state,
+            &auth,
+            ip,
+            q.vault_id,
+            "recovery_material",
+        )
+        .await?;
+    }
     metrics::counter!("cc_recovery_attempts_total", "kind" => "vault_material").increment(1);
     Ok(Json(VaultRecoveryMaterial {
         vault_id: q.vault_id,
