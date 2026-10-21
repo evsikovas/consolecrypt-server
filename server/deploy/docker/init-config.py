@@ -68,6 +68,7 @@ def create(directory, domain, mail):
         "CC_SHARED_KUBE_CONTEXTS_ENABLED": "false",
         "CC_SHARED_DB_CONNECTIONS_ENABLED": "false",
         "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED": "false",
+        "CC_DEVICE_PROTECTION_ENABLED": "false",
     }
     content = "# Private ConsoleCrypt Docker configuration. Do not commit or print.\n"
     content += "".join(f"{key}={quote(value)}\n" for key, value in settings.items())

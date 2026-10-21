@@ -73,6 +73,7 @@ pub fn build_router(state: AppState) -> Router {
         .route(paths::AUTH_EMAIL_VERIFY, post(a::verify_email))
         .route(paths::RECOVERY_ACCOUNT_START, post(a::recovery_start))
         .route(paths::RECOVERY_ACCOUNT_CONFIRM, post(a::recovery_confirm))
+        .route(paths::DEVICES_DENY, post(d::deny_device))
         .layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT));
 
     // Everything below requires principal A: bearer token + (protocol 1.5)

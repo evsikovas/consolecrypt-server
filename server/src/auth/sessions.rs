@@ -282,6 +282,52 @@ pub async fn revoke_user_sessions(
     Ok(ids.into_iter().map(SessionId::from).collect())
 }
 
+/// Device-protection variant of [`revoke_user_sessions`] for a caller in
+/// quarantine: revoke the sessions of `own_device` and of untrusted devices,
+/// keep `keep` and every session of a trusted device. Returns revoked ids.
+pub async fn revoke_untrusted_sessions(
+    conn: &mut PgConnection,
+    user_id: UserId,
+    own_device: DeviceId,
+    keep: Option<SessionId>,
+    reason: &str,
+) -> AppResult<Vec<SessionId>> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "UPDATE sessions s SET revoked_at = now(), revoke_reason = $4
+          WHERE s.user_id = $1 AND s.revoked_at IS NULL AND ($3::uuid IS NULL OR s.id <> $3)
+            AND (s.device_id = $2 OR NOT {})
+          RETURNING s.id",
+        crate::devices::protection::trusted_sql("s.device_id")
+    )))
+    .bind(Uuid::from(user_id))
+    .bind(Uuid::from(own_device))
+    .bind(keep.map(Uuid::from))
+    .bind(reason)
+    .fetch_all(conn)
+    .await?;
+    Ok(ids.into_iter().map(SessionId::from).collect())
+}
+
+/// Invalidate every pending password-reset token of `user_id` and, with
+/// `email_verify`, every pending email-verification token (TR-12). "This
+/// wasn't me" tokens are kept: the owner needs them.
+pub async fn invalidate_account_tokens(
+    conn: &mut PgConnection,
+    user_id: UserId,
+    email_verify: bool,
+) -> AppResult<u64> {
+    Ok(sqlx::query(
+        "UPDATE account_tokens SET used_at = now()
+          WHERE user_id = $1 AND used_at IS NULL
+            AND (purpose = 'password_reset' OR ($2 AND purpose = 'email_verify'))",
+    )
+    .bind(Uuid::from(user_id))
+    .bind(email_verify)
+    .execute(conn)
+    .await?
+    .rows_affected())
+}
+
 /// Revoke every live session bound to `device_id`. Returns revoked ids.
 pub async fn revoke_device_sessions(
     conn: &mut PgConnection,

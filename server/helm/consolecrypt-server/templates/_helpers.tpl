@@ -136,6 +136,11 @@ the server default applies. Integers are rendered without exponent notation.
 {{- if and (or $sharing.objectSharingEnabled $extensions) (not (and (kindIs "bool" $c.requireRequestProof) $c.requireRequestProof)) }}
 {{- fail "object sharing requires config.requireRequestProof=true" }}
 {{- end }}
+{{- $dp := $c.deviceProtection | default dict }}
+{{- $dpEnabled := false }}
+{{- if hasKey $dp "enabled" }}{{- $dpEnabled = get $dp "enabled" }}{{- end }}
+{{- if kindIs "invalid" $dpEnabled }}{{- $dpEnabled = false }}{{- end }}
+{{- if not (kindIs "bool" $dpEnabled) }}{{- fail "config.deviceProtection.enabled must be a boolean" }}{{- end }}
 {{- $env := dict
   "CC_LISTEN_ADDR" "0.0.0.0:8080"
   "CC_METRICS_LISTEN" (ternary "0.0.0.0:9090" "off" (.Values.metrics.enabled | default false))
@@ -155,6 +160,13 @@ the server default applies. Integers are rendered without exponent notation.
   "CC_SHARED_KUBE_CONTEXTS_ENABLED" $sharing.sharedKubeContextsEnabled
   "CC_SHARED_DB_CONNECTIONS_ENABLED" $sharing.sharedDbConnectionsEnabled
   "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED" $sharing.sharingOwnerOnlineEnrollmentEnabled
+  "CC_DEVICE_PROTECTION_ENABLED" $dpEnabled
+  "CC_NEW_DEVICE_MAIL_ENABLED" $dp.newDeviceMail
+  "CC_DEVICE_QUARANTINE_DAYS" $dp.quarantineDays
+  "CC_ENVELOPE_LIMIT_ACCOUNT_PER_HOUR" $dp.envelopesPerAccountPerHour
+  "CC_ENVELOPE_LIMIT_ACCOUNT_PER_DAY" $dp.envelopesPerAccountPerDay
+  "CC_ENVELOPE_LIMIT_DEVICE_PER_HOUR" $dp.envelopesPerDevicePerHour
+  "CC_NEW_DEVICE_MAIL_PER_HOUR" $dp.newDeviceMailsPerHour
   "CC_LOG_FORMAT" $c.log.format
   "CC_LOG" $c.log.filter
   "CC_ACCESS_TOKEN_TTL_SECS" $c.tokens.accessTtlSecs

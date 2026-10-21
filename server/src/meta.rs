@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
-use cc_protocol::meta::ServerInfo;
+use cc_protocol::meta::{ServerCapabilities, ServerInfo};
 use cc_protocol::version::HEADER_PROTOCOL_VERSION;
 use cc_protocol::{ProtocolVersion, PROTOCOL_VERSION};
 
@@ -24,6 +24,9 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
         registration_open: state.config.registration_open,
         email_verification_required: state.config.require_email_verification,
         source_code_url: Some(state.config.source_code_url.clone()),
+        capabilities: ServerCapabilities {
+            device_protection: state.config.device_protection.enabled,
+        },
     }
 }
 
