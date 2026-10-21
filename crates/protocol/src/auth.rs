@@ -122,12 +122,26 @@ pub struct RefreshRequest {
     pub refresh_token: SecretString,
 }
 
-/// `POST /v1/auth/logout` (authenticated) → `204`
+/// `POST /v1/auth/logout` (authenticated) → `204`, or `200`
+/// [`LogoutResponse`] when some sessions were deliberately kept (1.7).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LogoutRequest {
     /// Revoke every session of the account, not just the current one.
+    /// From a device in quarantine (protocol 1.7) only its own sessions and
+    /// those of untrusted devices are revoked.
     #[serde(default)]
     pub all_sessions: bool,
+}
+
+/// Body of a `200` logout (protocol 1.7): `all_sessions` came from a device
+/// in quarantine, so sessions of trusted devices were kept.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LogoutResponse {
+    pub sessions_revoked: u32,
+    /// Trusted devices whose sessions were not touched.
+    pub trusted_devices_kept: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantine_until: Option<Timestamp>,
 }
 
 /// `POST /v1/auth/password/forgot` and `POST /v1/recovery/account/start` → `202`

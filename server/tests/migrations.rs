@@ -184,11 +184,14 @@ async fn seed_personal_vault(pool: &sqlx::PgPool) -> (Uuid, Uuid, Uuid) {
 
 /// Compare whole rows, including timestamps and opaque payloads. Callers use
 /// assert!(a == b), so a failure never dumps envelopes/ciphertext to test logs.
+/// The device-protection bookkeeping columns (0008) are derived, not data,
+/// and are checked by their own upgrade test.
 async fn personal_snapshot(pool: &sqlx::PgPool) -> serde_json::Value {
     sqlx::query_scalar(
         "SELECT jsonb_build_object(
            'users', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM users t),
-           'devices', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM devices t),
+           'devices', (SELECT jsonb_agg(to_jsonb(t) - 'first_trusted_at' - 'quarantine_lifted_at'
+                                        ORDER BY id) FROM devices t),
            'vaults', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM vaults t),
            'members', (SELECT jsonb_agg(to_jsonb(t) ORDER BY vault_id, user_id) FROM vault_members t),
            'sequences', (SELECT jsonb_agg(to_jsonb(t) ORDER BY vault_id) FROM vault_sequences t),
@@ -499,4 +502,47 @@ async fn enrollment_upgrade_preserves_existing_rows_and_has_share_scoped_cascade
         before_personal == personal_snapshot(&db.pool).await,
         "sharing cascade altered personal data"
     );
+}
+
+#[tokio::test]
+async fn device_protection_upgrade_backfills_trust_and_first_devices() {
+    let Some((db, _)) = TestDb::create().await else {
+        return;
+    };
+    MIGRATOR.run_to(7, &db.pool).await.unwrap();
+    // The seeded device created the vault and holds its device envelope.
+    let (user, trusted, _vault) = seed_personal_vault(&db.pool).await;
+    let untrusted = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO devices (id, user_id, name, platform, encryption_public_key,
+                              signing_public_key, created_at)
+         VALUES ($1, $2, 'later device', 'cli', $3, $4, now() + interval '1 second')",
+    )
+    .bind(untrusted)
+    .bind(user)
+    .bind(random::<32>().as_slice())
+    .bind(random::<32>().as_slice())
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    MIGRATOR.run(&db.pool).await.unwrap();
+
+    let rows: Vec<(Uuid, bool, bool)> = sqlx::query_as(
+        "SELECT id, first_trusted_at IS NOT NULL, quarantine_lifted_at IS NOT NULL
+           FROM devices WHERE user_id = $1 ORDER BY created_at",
+    )
+    .bind(user)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, vec![(trusted, true, true), (untrusted, false, false)]);
+    for table in ["device_deny_tokens", "rate_counters", "envelope_issuances"] {
+        let n: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(n, 0, "{table}");
+    }
 }

@@ -90,6 +90,35 @@ impl CapturingMailer {
             })
     }
 
+    /// Latest "This wasn't me" token (`ccd_…`, inside the account link)
+    /// mailed to `to` with `kind`.
+    pub fn deny_token_for(&self, to: &str, kind: MailKind) -> Option<String> {
+        self.messages
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(k, t, _)| *k == kind && t == to)
+            .and_then(|(_, _, body)| {
+                body.split("token=")
+                    .nth(1)
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .filter(|t| t.starts_with("ccd_"))
+                    .map(str::to_owned)
+            })
+    }
+
+    /// Wait (bounded) until `n` mails of `kind` were sent.
+    pub async fn wait_for(&self, kind: MailKind, n: usize) {
+        for _ in 0..200 {
+            if self.count(kind) >= n {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("expected {n} {kind:?} mails, got {}", self.count(kind));
+    }
+
     pub fn count(&self, kind: MailKind) -> usize {
         self.messages
             .lock()
@@ -109,7 +138,9 @@ pub struct TestServer {
     /// Access token → device key: requests with a registered token are
     /// signed automatically (protocol 1.5 request proofs).
     signers: Mutex<std::collections::HashMap<String, (DeviceId, SigningKey)>>,
-    _db: TestDb,
+    db_name: String,
+    /// The owning server drops the database; replicas (`None`) do not.
+    _db: Option<TestDb>,
 }
 
 /// A fresh, empty database (no migrations), dropped on `Drop`.
@@ -215,7 +246,28 @@ impl TestServer {
     ) -> TestServer {
         let pool = test_db.pool.clone();
         db::migrate(&pool).await.expect("migrations");
+        let db_name = test_db.db_name.clone();
+        Self::serve(pool, url, db_name, Some(test_db), configure).await
+    }
 
+    /// A second replica on the same database (own pool, limiters, event
+    /// bus listener), like a second pod behind the load balancer.
+    pub async fn replica(&self, configure: impl FnOnce(&mut Config)) -> TestServer {
+        let owner = self._db.as_ref().expect("replica of the owning server");
+        let pool = db::connect_with(owner.admin_opts.clone().database(&owner.db_name), 10)
+            .await
+            .expect("connect replica pool");
+        let url = self.state.config.database_url.clone();
+        Self::serve(pool, url, self.db_name.clone(), None, configure).await
+    }
+
+    async fn serve(
+        pool: sqlx::PgPool,
+        url: String,
+        db_name: String,
+        test_db: Option<TestDb>,
+        configure: impl FnOnce(&mut Config),
+    ) -> TestServer {
         let mut config = Config::for_tests(url);
         config.event_bus = EventBusKind::Postgres;
         configure(&mut config);
@@ -241,8 +293,15 @@ impl TestServer {
             http: reqwest::Client::new(),
             mailer,
             signers: Mutex::default(),
+            db_name,
             _db: test_db,
         }
+    }
+
+    /// Let this server sign requests of every session `other` signs.
+    pub fn share_signers(&self, other: &TestServer) {
+        let theirs = other.signers.lock().unwrap().clone();
+        self.signers.lock().unwrap().extend(theirs);
     }
 
     /// Sign future requests carrying `token` with `device`'s key.
@@ -282,7 +341,7 @@ impl TestServer {
     }
 
     pub fn db_name(&self) -> &str {
-        &self._db.db_name
+        &self.db_name
     }
 
     pub fn url(&self, path: &str) -> String {

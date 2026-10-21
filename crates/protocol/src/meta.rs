@@ -27,6 +27,21 @@ pub struct ServerInfo {
     /// Added in protocol 1.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_code_url: Option<String>,
+    /// Optional server features (protocol 1.7). Absent on older servers,
+    /// which decode as "everything off".
+    #[serde(default)]
+    pub capabilities: ServerCapabilities,
+}
+
+/// Features a client may rely on only when advertised (protocol 1.7).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerCapabilities {
+    /// New-device protection is on: `DeviceInfo.trusted` /
+    /// `quarantine_until` are meaningful, the server emits
+    /// `device_registered`, and may answer `device_in_quarantine` /
+    /// `envelope_rate_limited`.
+    #[serde(default)]
+    pub device_protection: bool,
 }
 
 fn default_true() -> bool {
@@ -47,5 +62,18 @@ mod tests {
         let info: ServerInfo = serde_json::from_value(v).unwrap();
         assert!(info.registration_open);
         assert!(info.source_code_url.is_none());
+        assert!(!info.capabilities.device_protection);
+    }
+
+    #[test]
+    fn capabilities_roundtrip() {
+        let v = serde_json::json!({
+            "server_version": "0.1.16",
+            "protocol_version": "1.7",
+            "minimum_supported_protocol": "1.0",
+            "capabilities": { "device_protection": true, "future_flag": 1 }
+        });
+        let info: ServerInfo = serde_json::from_value(v).unwrap();
+        assert!(info.capabilities.device_protection);
     }
 }

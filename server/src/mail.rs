@@ -28,6 +28,9 @@ pub enum MailKind {
     AccountRecovery,
     DeviceRevoked,
     PasswordChanged,
+    NewDevice,
+    EnvelopeAbuse,
+    PasswordResetCompleted,
 }
 
 impl MailKind {
@@ -38,6 +41,9 @@ impl MailKind {
             MailKind::AccountRecovery => "account_recovery",
             MailKind::DeviceRevoked => "device_revoked",
             MailKind::PasswordChanged => "password_changed",
+            MailKind::NewDevice => "new_device",
+            MailKind::EnvelopeAbuse => "envelope_abuse",
+            MailKind::PasswordResetCompleted => "password_reset_completed",
         }
     }
 }
@@ -319,6 +325,170 @@ pub mod templates {
         }
     }
 
+    /// "This wasn't me" link of the device-protection mails (protocol 1.7).
+    fn deny_link(public_url: Option<&str>, token: &str) -> String {
+        match public_url {
+            Some(url) => format!(
+                "\n\nЭто не я — отозвать это устройство / This wasn't me — revoke this device:\n\
+                 {}/account#action=deny-device&token={token}",
+                url.trim_end_matches('/')
+            ),
+            None => "\n\nЕсли это не вы, отзовите устройство на доверенном устройстве и смените \
+                     пароль аккаунта. / If this wasn't you, revoke the device on a trusted \
+                     device and change your account password."
+                .to_owned(),
+        }
+    }
+
+    /// What the "new device" mail tells about the device.
+    #[derive(Debug)]
+    pub struct NewDeviceInfo<'a> {
+        pub name: &'a str,
+        pub platform: &'a str,
+        pub client_version: Option<&'a str>,
+        pub at: chrono::DateTime<chrono::Utc>,
+        pub ip: Option<std::net::IpAddr>,
+    }
+
+    pub fn new_device(
+        to: &str,
+        info: &NewDeviceInfo<'_>,
+        token: &str,
+        public_url: Option<&str>,
+    ) -> MailMessage {
+        let at = info.at.format("%Y-%m-%d %H:%M UTC");
+        let version = info.client_version.unwrap_or("—");
+        let ip = info
+            .ip
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "—".to_owned());
+        MailMessage {
+            kind: MailKind::NewDevice,
+            to: to.to_owned(),
+            subject: "ConsoleCrypt — вход с нового устройства / New device signed in".to_owned(),
+            body: format!(
+                "В ваш аккаунт ConsoleCrypt вошло новое устройство.\n\
+                 A new device signed in to your ConsoleCrypt account.\n\n\
+                 Устройство / Device: \"{name}\"\n\
+                 Платформа / Platform: {platform}\n\
+                 Версия / Version: {version}\n\
+                 Время / Time: {at}\n\
+                 IP: {ip}\n\n\
+                 Если это вы — ничего делать не нужно. Первые дни новое устройство не может \
+                 отзывать ваши доверенные устройства.\n\
+                 If this was you, there is nothing to do. For its first days a new device \
+                 cannot revoke your trusted devices.{}{}",
+                deny_link(public_url, token),
+                footer(public_url),
+                name = info.name,
+                platform = info.platform,
+            ),
+        }
+    }
+
+    /// Sent once when an hour has more sign-ins than individual mails.
+    pub fn new_device_summary(to: &str, public_url: Option<&str>) -> MailMessage {
+        MailMessage {
+            kind: MailKind::NewDevice,
+            to: to.to_owned(),
+            subject: "ConsoleCrypt — много входов с новых устройств / Many new device sign-ins"
+                .to_owned(),
+            body: format!(
+                "За последний час в ваш аккаунт ConsoleCrypt вошло много новых устройств. \
+                 Отдельных писем о них в этот час больше не будет. Проверьте список устройств \
+                 на доверенном устройстве и, если это не вы, смените пароль аккаунта.\n\n\
+                 Many new devices signed in to your ConsoleCrypt account in the last hour. \
+                 No further mails are sent for them this hour. Review your devices on a trusted \
+                 device and, if this wasn't you, change your account password.{}",
+                footer(public_url)
+            ),
+        }
+    }
+
+    pub fn envelope_abuse(
+        to: &str,
+        device_name: &str,
+        token: &str,
+        public_url: Option<&str>,
+    ) -> MailMessage {
+        MailMessage {
+            kind: MailKind::EnvelopeAbuse,
+            to: to.to_owned(),
+            subject: "ConsoleCrypt — повторные попытки доступа к хранилищу / Repeated vault access attempts"
+                .to_owned(),
+            body: format!(
+                "Кто-то многократно запрашивает доступ к хранилищу с устройства \"{device_name}\". \
+                 Сервер временно ограничил такие запросы.\n\n\
+                 Someone is repeatedly requesting access to your vault from the device \
+                 \"{device_name}\". The server has temporarily limited these requests.{}{}",
+                deny_link(public_url, token),
+                footer(public_url)
+            ),
+        }
+    }
+
+    /// The account password was changed from a device in quarantine:
+    /// trusted devices stay signed in (TR-7).
+    pub fn password_changed_new_device(
+        to: &str,
+        device_name: &str,
+        token: &str,
+        public_url: Option<&str>,
+    ) -> MailMessage {
+        MailMessage {
+            kind: MailKind::PasswordChanged,
+            to: to.to_owned(),
+            subject: "ConsoleCrypt — пароль изменён с нового устройства / Password changed from a new device"
+                .to_owned(),
+            body: format!(
+                "Пароль аккаунта ConsoleCrypt изменён с нового устройства \"{device_name}\". \
+                 Ваши доверенные устройства остались в аккаунте.\n\n\
+                 Your ConsoleCrypt account password was changed from the new device \
+                 \"{device_name}\". Your trusted devices stay signed in.{}\n\n\
+                 После отзыва смените пароль через «Забыли пароль?». / After revoking, reset \
+                 the password via \"Forgot password?\".{}",
+                deny_link(public_url, token),
+                footer(public_url)
+            ),
+        }
+    }
+
+    /// TR-13: after a password reset, with the devices it revoked.
+    pub fn password_reset_completed(
+        to: &str,
+        revoked: &[String],
+        token: &str,
+        public_url: Option<&str>,
+    ) -> MailMessage {
+        let list = if revoked.is_empty() {
+            "—".to_owned()
+        } else {
+            revoked
+                .iter()
+                .map(|n| format!("  • \"{n}\""))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        MailMessage {
+            kind: MailKind::PasswordResetCompleted,
+            to: to.to_owned(),
+            subject: "ConsoleCrypt — пароль аккаунта сброшен / Account password was reset"
+                .to_owned(),
+            body: format!(
+                "Пароль аккаунта ConsoleCrypt сброшен, все сеансы завершены. Отозваны устройства, \
+                 которые ни разу не открывали хранилище:\n\
+                 Your ConsoleCrypt account password was reset and every session was signed out. \
+                 Devices that never unlocked the vault were revoked:\n\n{list}\n\n\
+                 Если сброс сделали не вы, ссылка ниже отзовёт новые неподтверждённые \
+                 устройства, вошедшие после сброса; затем снова сбросьте пароль.\n\
+                 If you did not reset it, the link below revokes new unconfirmed devices that \
+                 signed in after the reset; then reset the password again.{}{}",
+                deny_link(public_url, token),
+                footer(public_url)
+            ),
+        }
+    }
+
     pub fn password_changed(to: &str, public_url: Option<&str>) -> MailMessage {
         MailMessage {
             kind: MailKind::PasswordChanged,
@@ -348,6 +518,22 @@ mod tests {
             templates::password_reset("a@example.org", &token, true, url),
             templates::device_revoked("a@example.org", "Мой ноутбук", url),
             templates::password_changed("a@example.org", url),
+            templates::new_device(
+                "a@example.org",
+                &templates::NewDeviceInfo {
+                    name: "Ноутбук",
+                    platform: "linux",
+                    client_version: Some("0.8.6"),
+                    at: chrono::Utc::now(),
+                    ip: Some("192.0.2.1".parse().unwrap()),
+                },
+                "ccd_x",
+                url,
+            ),
+            templates::new_device_summary("a@example.org", url),
+            templates::envelope_abuse("a@example.org", "Ноутбук", "ccd_x", url),
+            templates::password_changed_new_device("a@example.org", "Ноутбук", "ccd_x", url),
+            templates::password_reset_completed("a@example.org", &["Ноутбук".into()], "ccd_x", url),
         ];
         for msg in messages {
             let wire = String::from_utf8(build_message(&from, &msg).unwrap().formatted()).unwrap();
@@ -359,6 +545,17 @@ mod tests {
                 line.eq_ignore_ascii_case("Content-Type: text/plain; charset=utf-8")
             }));
         }
+    }
+
+    #[test]
+    fn deny_links_carry_the_token_in_the_fragment() {
+        let m =
+            templates::envelope_abuse("a@example.org", "d", "ccd_TOKEN", Some("https://x.test/"));
+        assert!(m
+            .body
+            .contains("https://x.test/account#action=deny-device&token=ccd_TOKEN"));
+        let m = templates::envelope_abuse("a@example.org", "d", "ccd_TOKEN", None);
+        assert!(!m.body.contains("ccd_TOKEN"));
     }
 
     #[test]
