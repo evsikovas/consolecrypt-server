@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
 # cargo-deny policy for the server workspace (ADR-0005, server variant).
-# Run in server/:  cargo deny check licenses bans sources
+# Run from the repository root:
+#   cargo deny --manifest-path server/Cargo.toml --locked check advisories bans sources licenses
+# or everything at once: python3 server/scripts/dependency_audit.py check
+# CI runs the same command in server.yml (validate) and dependency-audit.yml.
 #
 # The server is AGPL-3.0-only, so in addition to the permissive licenses
 # allowed everywhere it may depend on GPL-3.0-compatible copyleft (LGPL-3.0,
@@ -9,6 +12,15 @@
 # GPL-2.0-only (AGPL-incompatible), SSPL, BUSL, "non-commercial"/proprietary.
 [graph]
 all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Unmaintained crates fail only when a ConsoleCrypt crate depends on them directly.
+unmaintained = "workspace"
+# Every ignore needs a reason and a review date (docs/public/HOSTING.md).
+# Owner of all exceptions: Alexander Evsikov (@evsikovas).
+ignore = []
 
 [licenses]
 confidence-threshold = 0.9
@@ -46,10 +58,14 @@ multiple-versions = "warn"
 wildcards = "deny"
 # Path dependencies (cc-protocol) of this private (publish = false) crate.
 allow-wildcard-paths = true
-
-[advisories]
-yanked = "deny"
+# TLS is rustls-only.
+deny = [
+    { crate = "native-tls", reason = "TLS uses rustls" },
+    { crate = "openssl", reason = "TLS uses rustls" },
+    { crate = "openssl-sys", reason = "TLS uses rustls" },
+]
 
 [sources]
 unknown-registry = "deny"
+# No git dependencies: cc-protocol is a path dependency here.
 unknown-git = "deny"

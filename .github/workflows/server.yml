@@ -36,6 +36,12 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+      # Hosted runner only: a vulnerable, yanked, banned or unlicensed dependency
+      # fails validation, so no release image is built from it.
+      - name: Dependency audit (cargo-deny)
+        run: |
+          python3 server/scripts/dependency_audit.py install "$RUNNER_TEMP/audit-tools" cargo-deny
+          PATH="$RUNNER_TEMP/audit-tools:$PATH" python3 server/scripts/dependency_audit.py check
       - name: Install the repository toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -54,6 +60,7 @@ jobs:
         run: |
           python3 -m unittest discover -s server/scripts -p 'test_publish*.py' -v
           python3 -m unittest discover -s server/scripts -p 'test_release*.py' -v
+          python3 -m unittest discover -s server/scripts -p 'test_dependency_audit.py' -v
       - name: Server, native configuration, sharing and backup/restore tests
         env:
           CC_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
