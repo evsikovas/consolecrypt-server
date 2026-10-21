@@ -13,6 +13,7 @@ FLAGS = {
     "sharedGroupsEnabled": "CC_SHARED_GROUPS_ENABLED",
     "sharedSecretsEnabled": "CC_SHARED_SECRETS_ENABLED",
     "sharedKubeContextsEnabled": "CC_SHARED_KUBE_CONTEXTS_ENABLED",
+    "sharedDbConnectionsEnabled": "CC_SHARED_DB_CONNECTIONS_ENABLED",
     "sharingOwnerOnlineEnrollmentEnabled": "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED",
 }
 

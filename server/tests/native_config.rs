@@ -80,6 +80,9 @@ fn healthcheck_uses_config_file_and_environment_override_without_database() {
             loop {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
+                        // Accepted sockets can inherit nonblocking mode on
+                        // macOS; use the bounded blocking read below explicitly.
+                        socket.set_nonblocking(false).unwrap();
                         socket
                             .set_read_timeout(Some(std::time::Duration::from_secs(3)))
                             .unwrap();

@@ -66,6 +66,7 @@ def create(directory, domain, mail):
         "CC_SHARED_GROUPS_ENABLED": "false",
         "CC_SHARED_SECRETS_ENABLED": "false",
         "CC_SHARED_KUBE_CONTEXTS_ENABLED": "false",
+        "CC_SHARED_DB_CONNECTIONS_ENABLED": "false",
         "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED": "false",
     }
     content = "# Private ConsoleCrypt Docker configuration. Do not commit or print.\n"

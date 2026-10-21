@@ -271,6 +271,7 @@ config:
   sharedGroupsEnabled: false
   sharedSecretsEnabled: false
   sharedKubeContextsEnabled: false
+  sharedDbConnectionsEnabled: false
   sharingOwnerOnlineEnrollmentEnabled: false
   log:
     # -- json | pretty (CC_LOG_FORMAT).

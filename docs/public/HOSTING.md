@@ -146,10 +146,10 @@ cc_compose exec -T server /usr/local/bin/consolecrypt-server \
 Для закрытия регистрации измените `CC_REGISTRATION_OPEN=false` в `server.env`
 и выполните `cc_compose up -d --wait --wait-timeout 180 server`.
 
-Четыре флага sharing по умолчанию выключены. Если администратор отдельно решил
+Флаги sharing по умолчанию выключены. Если администратор отдельно решил
 включить совместный доступ и проверил совместимость клиентов, он изменяет
 `CC_OBJECT_SHARING_ENABLED`, `CC_SHARED_GROUPS_ENABLED`, `CC_SHARED_SECRETS_ENABLED`,
-`CC_SHARED_KUBE_CONTEXTS_ENABLED`
+`CC_SHARED_KUBE_CONTEXTS_ENABLED`, `CC_SHARED_DB_CONNECTIONS_ENABLED`
 и `CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED` в том же приватном файле на `true`,
 затем пересоздаёт только сервис `server` той же командой. Подписи запросов
 остаются обязательными. Основной флаг обязателен для остальных расширений.
@@ -452,6 +452,7 @@ config:
   sharedGroupsEnabled: false
   sharedSecretsEnabled: false
   sharedKubeContextsEnabled: false
+  sharedDbConnectionsEnabled: false
   sharingOwnerOnlineEnrollmentEnabled: false
 
 mail:
@@ -635,6 +636,7 @@ config:
   sharedGroupsEnabled: true
   sharedSecretsEnabled: true
   sharedKubeContextsEnabled: true
+  sharedDbConnectionsEnabled: true
   sharingOwnerOnlineEnrollmentEnabled: true
 ```
 
@@ -751,3 +753,19 @@ PostgreSQL требует отдельного плана переноса да�
 устройств и версии; адрес кластера, сертификаты и учётные данные находятся
 в зашифрованном содержимом. Сервер не читает kubeconfig и не подключается к API
 Kubernetes. Отключение флага скрывает общий объект, сохраняя его шифротекст.
+
+### Общие подключения к базам данных
+
+Начиная с сервера 0.1.15 (протокол 1.6), отдельный флаг
+`CC_SHARED_DB_CONNECTIONS_ENABLED=true` разрешает обмен зашифрованными
+подключениями к базам данных. В Helm используется `config.sharedDbConnectionsEnabled`.
+Основной `CC_OBJECT_SHARING_ENABLED` и строгая проверка подписей запросов
+обязательны. Возможность объявляется как `supports_db_connections`; только
+клиент с явным `include_db_connections=true` получает новый тип `db_connection`
+в списке общего доступа. Старые клиенты не получают неизвестный им тип.
+
+Сервер хранит непрозрачный шифротекст и проверяет подписи, состав участников
+и ревизии. Он не подключается к PostgreSQL, MySQL, ClickHouse, Redis или MongoDB
+пользователя и не выполняет запросы к ним. Выключение флага скрывает общие
+подключения, не удаляя их зашифрованное содержимое. Формат хранилища сервера
+не меняется; миграция базы для этого расширения не нужна.

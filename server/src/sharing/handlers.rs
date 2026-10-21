@@ -80,6 +80,8 @@ struct ListQuery {
     include_secrets: bool,
     #[serde(default)]
     include_kube_contexts: bool,
+    #[serde(default)]
+    include_db_connections: bool,
     #[serde(default = "page_limit")]
     limit: u32,
 }
@@ -98,6 +100,7 @@ async fn list(
                 include_groups: q.include_groups,
                 include_secrets: q.include_secrets,
                 include_kube_contexts: q.include_kube_contexts,
+                include_db_connections: q.include_db_connections,
             },
         )
         .await?,

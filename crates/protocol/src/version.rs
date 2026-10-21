@@ -19,7 +19,7 @@ use std::str::FromStr;
 ///
 /// * major — incompatible wire change (new `/vN` API prefix);
 /// * minor — additive, backwards compatible change.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 5 };
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 6 };
 
 /// URL prefix for the current major version.
 pub const API_PREFIX: &str = "/v1";

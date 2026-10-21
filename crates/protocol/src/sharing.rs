@@ -35,6 +35,8 @@ pub enum SharedItemKind {
     Secret,
     /// Requires independently advertised Kubernetes context support.
     KubeContext,
+    /// Requires independently advertised database connection support.
+    DbConnection,
 }
 
 impl SharedItemKind {
@@ -45,6 +47,7 @@ impl SharedItemKind {
             Self::Snippet => 3,
             Self::Secret => 4,
             Self::KubeContext => 5,
+            Self::DbConnection => 6,
         }
     }
 }
@@ -210,6 +213,8 @@ pub struct SharingCapabilities {
     pub supports_secrets: bool,
     #[serde(default)]
     pub supports_kube_contexts: bool,
+    #[serde(default)]
+    pub supports_db_connections: bool,
     #[serde(default)]
     pub supports_owner_online_enrollment_v1: bool,
 }

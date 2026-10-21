@@ -9,6 +9,7 @@ fn old_capabilities_fail_closed_for_independent_extensions() {
     assert!(!decoded.supports_groups);
     assert!(!decoded.supports_secrets);
     assert!(!decoded.supports_kube_contexts);
+    assert!(!decoded.supports_db_connections);
     assert!(!decoded.supports_owner_online_enrollment_v1);
 }
 
@@ -23,7 +24,21 @@ fn extension_capabilities_remain_independent_and_typed() {
     assert!(decoded.supports_groups);
     assert!(!decoded.supports_secrets);
     assert!(!decoded.supports_kube_contexts);
+    assert!(!decoded.supports_db_connections);
     assert!(!decoded.supports_owner_online_enrollment_v1);
     value["supports_secrets"] = serde_json::json!("true");
+    assert!(serde_json::from_value::<SharingCapabilities>(value).is_err());
+}
+
+#[test]
+fn database_capability_is_independent_and_strictly_boolean() {
+    let mut value = serde_json::json!({"enabled":true,
+        "server_instance_id":"00000000-0000-0000-0000-000000000001",
+        "format":1,"max_members":64,"max_ciphertext_bytes":1048592,
+        "supports_db_connections":true});
+    let decoded: SharingCapabilities = serde_json::from_value(value.clone()).unwrap();
+    assert!(decoded.supports_db_connections);
+    assert!(!decoded.supports_kube_contexts);
+    value["supports_db_connections"] = serde_json::json!("true");
     assert!(serde_json::from_value::<SharingCapabilities>(value).is_err());
 }

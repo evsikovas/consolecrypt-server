@@ -312,3 +312,15 @@ fn kubernetes_kind_has_an_independent_signed_domain() {
     assert_eq!(sharing_object_aad(&context(&m)).unwrap().last(), Some(&5));
     assert_eq!(serde_json::to_value(m.kind).unwrap(), "kube_context");
 }
+
+#[test]
+fn database_kind_has_an_independent_signed_domain() {
+    let mut m = manifest();
+    let old_manifest = sharing_manifest_message(&m).unwrap();
+    let old_aad = sharing_object_aad(&context(&m)).unwrap();
+    m.kind = SharedItemKind::DbConnection;
+    assert_ne!(old_manifest, sharing_manifest_message(&m).unwrap());
+    assert_ne!(old_aad, sharing_object_aad(&context(&m)).unwrap());
+    assert_eq!(sharing_object_aad(&context(&m)).unwrap().last(), Some(&6));
+    assert_eq!(serde_json::to_value(m.kind).unwrap(), "db_connection");
+}
