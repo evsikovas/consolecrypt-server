@@ -1,0 +1,77 @@
+name: Dependency audit
+
+# GitHub-hosted runners only. Pull requests (including Dependabot) run the
+# read-only audit. Add osv-scanner to the install step when the repository
+# gains a pubspec.lock or npm lockfile (the check fails until then).
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '**/deny.toml'
+      - server/scripts/dependency_audit.py
+      - .github/workflows/dependency-audit.yml
+
+permissions: {}
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  audit:
+    if: github.repository == 'evsikovas/consolecrypt-server'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.check.outcome }}
+      summary: ${{ steps.check.outputs.summary }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Test the audit script
+        run: python3 -m unittest discover -s server/scripts -p 'test_dependency_audit.py' -v
+      - name: Install pinned cargo-deny
+        run: |
+          python3 server/scripts/dependency_audit.py install "$RUNNER_TEMP/audit-tools" cargo-deny
+          echo "$RUNNER_TEMP/audit-tools" >> "$GITHUB_PATH"
+      - name: cargo-deny
+        id: check
+        continue-on-error: true
+        run: python3 server/scripts/dependency_audit.py check
+      - name: Fail on findings
+        if: steps.check.outcome != 'success'
+        run: exit 1
+
+  # Separate job so pull request code never runs with issues: write.
+  issue:
+    needs: audit
+    if: >-
+      always() && github.event_name != 'pull_request' &&
+      (needs.audit.outputs.outcome == 'success' || needs.audit.outputs.outcome == 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Open, update or close the dependency issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          AUDIT_SUMMARY: ${{ needs.audit.outputs.summary }}
+          OUTCOME: ${{ needs.audit.outputs.outcome }}
+        run: python3 server/scripts/dependency_audit.py issue --outcome "$OUTCOME"

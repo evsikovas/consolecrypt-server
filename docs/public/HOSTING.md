@@ -809,3 +809,29 @@ Kubernetes. Отключение флага скрывает общий объе
 страницу аккаунта, которая обрабатывает `#action=deny-device`, затем установите
 флаг и пересоздайте сервис `server`. Без SMTP ссылки «Это не я» не отправляются,
 остальная защита работает.
+
+## Проверка зависимостей сервера
+
+Для разработчиков и тех, кто собирает образ сам. `server/scripts/dependency_audit.py check`
+запускает `cargo deny check advisories bans sources licenses` для `server` и
+`crates` и проверяет, что неопубликованные crates — собственные (`cc-*`,
+`consolecrypt-server`) под `AGPL-3.0-only`:
+
+```sh
+cargo install --locked cargo-deny@0.20.2
+python3 server/scripts/dependency_audit.py check
+```
+
+CI выполняет то же на GitHub-hosted `ubuntu-24.04`: в `validate` тегового выпуска
+(провал останавливает сборку образа) и в еженедельном `dependency-audit.yml`,
+который также проверяет pull request с изменёнными зависимостями, открывает
+или обновляет issue «Уязвимые зависимости» и закрывает его после чистого прогона.
+`cargo-deny` скачивается из GitHub Releases с проверкой SHA-256 из скрипта.
+
+Политика (`server/deny.toml`, `crates/deny.toml`): уязвимые и yanked-версии
+запрещены; unmaintained — для прямых зависимостей; TLS только rustls (`native-tls`,
+`openssl`, `openssl-sys` запрещены); git-зависимостей нет. `cc-protocol` линкуется
+клиентом, поэтому `crates/` следует более строгому списку лицензий клиента.
+Исключение добавляется в `ignore` соответствующего `deny.toml` только с
+идентификатором совета, причиной, владельцем и датой пересмотра (не позже трёх
+месяцев).
