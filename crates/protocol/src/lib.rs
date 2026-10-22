@@ -18,6 +18,7 @@ pub mod auth;
 pub mod bytes;
 pub mod canonical;
 pub mod devices;
+pub mod enterprise_auth;
 pub mod envelopes;
 pub mod error;
 pub mod events;

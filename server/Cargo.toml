@@ -7,7 +7,7 @@ resolver = "2"
 [package]
 name = "consolecrypt-server"
 description = "Self-hosted zero-knowledge sync server for ConsoleCrypt"
-version = "0.1.18"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
@@ -71,8 +71,17 @@ opentelemetry-otlp = { version = "0.33", optional = true }
 tracing-opentelemetry = { version = "0.34", optional = true }
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
+# Enterprise sign-in (protocol 1.8). OIDC: HTTP client for discovery, JWKS and
+# the token endpoint; ID token signatures are verified with `ring` (RS256,
+# PS256, ES256 only). `ring` AEAD also seals the upstream IdP refresh tokens
+# at rest — never vault data. LDAP / Active Directory over rustls only.
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+
 [dev-dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 tokio-tungstenite = "0.30"
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 

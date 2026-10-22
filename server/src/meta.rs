@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
-use cc_protocol::meta::{ServerCapabilities, ServerInfo};
+use cc_protocol::meta::{AuthCapability, AuthMode, AuthProvider, ServerCapabilities, ServerInfo};
 use cc_protocol::version::HEADER_PROTOCOL_VERSION;
 use cc_protocol::{ProtocolVersion, PROTOCOL_VERSION};
 
@@ -23,7 +23,8 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
         protocol_version: PROTOCOL_VERSION,
         minimum_supported_protocol: MINIMUM_SUPPORTED_PROTOCOL,
         upgrade_required,
-        registration_open: state.config.registration_open,
+        // Enterprise accounts are created by the first IdP/directory sign-in.
+        registration_open: state.config.registration_open && !state.config.auth.is_enterprise(),
         email_verification_required: state.config.require_email_verification,
         source_code_url: Some(state.config.source_code_url.clone()),
         capabilities: ServerCapabilities {
@@ -31,6 +32,22 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
             share_leave: sharing,
             share_restore: sharing,
             recipient_lookup_post: sharing,
+            auth: auth_capability(&state.config.auth),
+        },
+    }
+}
+
+/// `capabilities.auth` (protocol 1.9).
+pub fn auth_capability(auth: &crate::config::AuthConfig) -> AuthCapability {
+    match auth.enterprise_provider() {
+        None => AuthCapability::default(),
+        Some(p) => AuthCapability {
+            mode: AuthMode::Enterprise,
+            provider: Some(match p {
+                crate::config::ProviderKind::Oidc => AuthProvider::Oidc,
+                crate::config::ProviderKind::Ldap => AuthProvider::Ldap,
+            }),
+            display_name: auth.display_name.clone(),
         },
     }
 }

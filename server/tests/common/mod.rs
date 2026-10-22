@@ -12,6 +12,7 @@
 #![allow(dead_code)]
 
 pub mod enrollment;
+pub mod enterprise;
 pub mod sharing;
 
 use cc_protocol::auth::{AuthResponse, SecretString};
@@ -268,16 +269,20 @@ impl TestServer {
         test_db: Option<TestDb>,
         configure: impl FnOnce(&mut Config),
     ) -> TestServer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
         let mut config = Config::for_tests(url);
         config.event_bus = EventBusKind::Postgres;
         configure(&mut config);
+        // OIDC needs the server's own URL (IdP redirect URI) before it starts.
+        if config.auth.is_enterprise() && config.public_url.is_none() {
+            config.public_url = Some(format!("http://{addr}"));
+        }
         let mailer = Arc::new(CapturingMailer::default());
         let state = AppState::with_mailer(config, pool, mailer.clone())
             .await
             .expect("state");
         let app = build_router(state.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             axum::serve(
                 listener,

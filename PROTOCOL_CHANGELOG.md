@@ -2,23 +2,63 @@
 
 ## Unreleased
 
-- Protocol 1.9 (2026-10-22, server 0.1.18, additive): shared notes,
-  advertised as `supports_notes_v1` in
-  `GET /v1/shares/capabilities` (`CC_SHARED_NOTES_ENABLED`, default off):
-  - `cc_protocol::sharing_notes`: `SharedNotesKeySet` (owner-signed notes key
-    of an access epoch, wrapped per member device like a revision DEK, labels
-    `notes-key-set`, `notes-envelope-aad`, `notes-envelope-key`),
-    `SharedNote` (XChaCha20-Poly1305 under HKDF(notes key, salt = note id,
-    info = `note-key` ‖ epoch); AAD `note-aad`; the author device signs
-    `note` over the payload hash, excluding the epoch so the owner can rekey).
-  - `GET /v1/shares/{id}/notes`, `PUT /v1/shares/{id}/notes/keys` (owner
-    device, current epoch, envelopes exactly for the member devices, never
-    replaced), `PUT|DELETE /v1/shares/{id}/notes/{note_id}` (any member writes
-    its own notes, revision + 1, current epoch; owner may delete any),
-    `POST /v1/shares/{id}/notes/rekey` (owner device moves notes of earlier
-    epochs into the current one, keeping authorship and signatures).
-  - Limits: 500 notes per share, 288 KiB + 16 ciphertext per note, 100 notes
-    per rekey request. Migration `0010_share_notes`.
+- Protocol 1.9 (2026-10-22, server 0.2.0, additive): enterprise sign-in mode
+  (`cc_protocol::enterprise_auth`) and shared notes
+  (`cc_protocol::sharing_notes`). Servers in the default `standard` mode
+  behave as before; older clients keep working against them unchanged.
+  - `ServerInfo.capabilities.auth` (`AuthCapability { mode, provider,
+    display_name }`): `mode` = `standard` | `enterprise`, `provider` =
+    `oidc` | `ldap` (enterprise only), optional `display_name` for the
+    sign-in button. Absent on older servers = `standard`. Unknown future
+    values decode as `unknown` (ask the user to update the app).
+    `registration_open` is meaningless in enterprise mode.
+  - OIDC (system browser, PKCE S256 on both legs):
+    `GET /v1/auth/oidc/start?redirect_uri&code_challenge[&code_challenge_method=S256]&state&device_id[&login_hint]`
+    (`OidcStartQuery`, `OidcStartQuery::to_url`) → redirect to the IdP →
+    `GET /v1/auth/oidc/callback` (server-side) → redirect to the app's
+    `redirect_uri` with `login_code` + `state` or `error` +
+    `error_description` + `state` (`OidcAppCallback`). Allowed app redirect
+    URIs only: `http://127.0.0.1:{port}/auth/callback`,
+    `http://[::1]:{port}/auth/callback`, `consolecrypt://auth/callback`
+    (`is_allowed_app_redirect_uri`). `POST /v1/auth/oidc/exchange`
+    `OidcExchangeRequest { login_code, code_verifier, device, device_proof? }`
+    → `AuthResponse`. The `login_code` is single use, valid
+    `OIDC_LOGIN_CODE_TTL_SECONDS` (60 s) and bound to the `code_challenge`
+    and `device_id`; a flow lives `OIDC_FLOW_TTL_SECONDS` (600 s).
+  - LDAP / Active Directory: `POST /v1/auth/ldap/login`
+    `LdapLoginRequest { login, password, device, device_proof? }` →
+    `AuthResponse`; unknown login and wrong password are indistinguishable
+    (`401 invalid_credentials`).
+  - Device rules are those of password login: `device_proof` is required for
+    an already registered device; a new device is untrusted and subject to
+    device protection (1.7).
+  - New error codes: `enterprise_auth_required` (403; register, password
+    login, password reset/change and email verification on an enterprise
+    server — the message asks older clients to update the app, which fall
+    back to `forbidden`), `identity_conflict` (409), `domain_not_allowed`
+    (403), `group_required` (403), `mfa_required` (403), `idp_unavailable`
+    (503, retryable), `account_disabled` (403; also from
+    `POST /v1/auth/refresh` when the periodic re-check finds the user
+    disabled, deleted or outside the required group — the session family is
+    revoked).
+  - New limits: `MAX_OIDC_STATE_LEN` (512), `MAX_ENTERPRISE_LOGIN_LEN` (256).
+  - Migration `0011_enterprise_auth`.
+  - Shared notes, advertised as `supports_notes_v1` in
+    `GET /v1/shares/capabilities` (`CC_SHARED_NOTES_ENABLED`, default off):
+    - `cc_protocol::sharing_notes`: `SharedNotesKeySet` (owner-signed notes key
+      of an access epoch, wrapped per member device like a revision DEK, labels
+      `notes-key-set`, `notes-envelope-aad`, `notes-envelope-key`),
+      `SharedNote` (XChaCha20-Poly1305 under HKDF(notes key, salt = note id,
+      info = `note-key` ‖ epoch); AAD `note-aad`; the author device signs
+      `note` over the payload hash, excluding the epoch so the owner can rekey).
+    - `GET /v1/shares/{id}/notes`, `PUT /v1/shares/{id}/notes/keys` (owner
+      device, current epoch, envelopes exactly for the member devices, never
+      replaced), `PUT|DELETE /v1/shares/{id}/notes/{note_id}` (any member writes
+      its own notes, revision + 1, current epoch; owner may delete any),
+      `POST /v1/shares/{id}/notes/rekey` (owner device moves notes of earlier
+      epochs into the current one, keeping authorship and signatures).
+    - Limits: 500 notes per share, 288 KiB + 16 ciphertext per note, 100 notes
+      per rekey request. Migration `0010_share_notes`.
 
 - Protocol 1.8 (2026-10-22, server 0.1.17, additive): owner-only delete of
   shared items with a restore window, and recipients leaving a share

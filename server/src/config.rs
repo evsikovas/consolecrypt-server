@@ -13,7 +13,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+mod auth;
 mod file;
+pub use auth::{
+    check_idp_url, email_domain, AuthConfig, AuthModeKind, LdapConfig, OidcConfig, OidcPreset,
+    ProviderKind, TokenAuthMethod, DEFAULT_LDAP_USER_FILTER,
+};
 pub use file::ConfigSource;
 
 /// Default AGPL §13 source offer (ADR-0005). Operators of modified builds must
@@ -68,6 +73,9 @@ pub struct Config {
     /// New-device protection (security audit S1, protocol 1.7).
     pub device_protection: DeviceProtectionConfig,
     pub mail: MailConfig,
+    /// Sign-in mode: standard (account passwords) or enterprise (OIDC/LDAP,
+    /// protocol 1.8).
+    pub auth: AuthConfig,
     /// Byte budget of one `changes`/`snapshot` page.
     pub sync_page_bytes: usize,
     /// Quota: bytes of live ciphertext per vault (push beyond → 413).
@@ -240,7 +248,9 @@ impl Config {
             ),
         };
 
+        let auth = AuthConfig::from_lookup(&get, get("CC_PUBLIC_URL").as_deref())?;
         let config = Self {
+            auth,
             listen_addr: parse_or(
                 get("CC_LISTEN_ADDR"),
                 "CC_LISTEN_ADDR",
@@ -621,6 +631,7 @@ impl fmt::Debug for Config {
             .field("rate_limits", &self.rate_limits)
             .field("device_protection", &self.device_protection)
             .field("mail", &self.mail)
+            .field("auth", &self.auth)
             .field("maintenance_interval", &self.maintenance_interval)
             .field("retention", &self.retention)
             .finish_non_exhaustive()

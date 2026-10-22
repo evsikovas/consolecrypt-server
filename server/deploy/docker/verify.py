@@ -130,9 +130,14 @@ def main():
             assert meta["capabilities"]["share_leave"] is False
             assert meta["capabilities"]["share_restore"] is False
             assert meta["capabilities"]["recipient_lookup_post"] is False
+            # Protocol 1.9: standard sign-in unless CC_AUTH_MODE=enterprise.
+            assert meta["capabilities"]["auth"] == {"mode": "standard"}
+            assert meta["registration_open"] is True
             assert meta["source_code_url"] == config.SOURCE
             assert meta["email_verification_required"] is True
             request(origin, "/v1/auth/me", 401)
+            # Enterprise sign-in routes exist but are off in standard mode.
+            request(origin, "/v1/auth/oidc/start", 404)
             request(origin, "/account", 404)
             return meta
 
@@ -195,13 +200,13 @@ def main():
                        "WHERE datname='consolecrypt';") == "consolecrypt"
             migrations = sql("SELECT string_agg(version::text, ',' ORDER BY version) "
                              "FROM _sqlx_migrations WHERE success;")
-            assert migrations == "1,2,3,4,6,7,8,9,10"
+            assert migrations == "1,2,3,4,6,7,8,9,10,11"
             instance = sql("SELECT instance_id FROM sharing_instance;")
             marker = uuid.uuid4().hex
             sql("CREATE TABLE compose_verification_marker(value text PRIMARY KEY); "
                 f"INSERT INTO compose_verification_marker VALUES ('{marker}');")
-            checks.append("nonroot read-only server; database-owner role is not a superuser; migrations 1,2,3,4,6,7,8,9,10")
-            checks.append("HTTP healthz/readyz/meta/auth; no website; strict proofs and sharing defaults")
+            checks.append("nonroot read-only server; database-owner role is not a superuser; migrations 1,2,3,4,6,7,8,9,10,11")
+            checks.append("HTTP healthz/readyz/meta/auth; no website; strict proofs and sharing defaults; standard sign-in (protocol 1.9)")
             ca = private / "local-ca.crt"
             cc("cp", "caddy:/data/caddy/pki/authorities/local/root.crt", str(ca))
             context = ssl.create_default_context(cafile=str(ca))

@@ -54,6 +54,8 @@ pub struct MaintenanceReport {
     pub login_nonces_deleted: u64,
     /// Expired "This wasn't me" tokens, rate counters and issuance markers.
     pub protection_rows_deleted: u64,
+    /// Expired OIDC flows / login codes and LDAP failure windows (1.8).
+    pub enterprise_rows_deleted: u64,
     pub sync_mutations_deleted: u64,
     pub vaults_purged: u64,
     /// Retained content of owner-deleted shared items past the restore window.
@@ -166,6 +168,17 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<MaintenanceReport> {
             "DELETE FROM envelope_issuances WHERE window_start < now() - interval '2 days'",
         ] {
             report.protection_rows_deleted +=
+                sqlx::query(sql).execute(&mut *conn).await?.rows_affected();
+        }
+
+        // Enterprise sign-in: flows live 10 min, login codes 60 s, failure
+        // windows at most a day.
+        for sql in [
+            "DELETE FROM oidc_flows WHERE expires_at < now()",
+            "DELETE FROM oidc_login_codes WHERE expires_at < now() - interval '1 hour'",
+            "DELETE FROM ldap_login_failures WHERE window_start < now() - interval '2 days'",
+        ] {
+            report.enterprise_rows_deleted +=
                 sqlx::query(sql).execute(&mut *conn).await?.rows_affected();
         }
 

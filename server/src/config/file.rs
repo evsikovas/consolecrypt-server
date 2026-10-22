@@ -131,6 +131,21 @@ mod tests {
     use super::*;
     use crate::Config;
 
+    /// A setting read by the configuration but missing from `KEYS` would be
+    /// ignored from the environment filter and rejected in a config file.
+    #[test]
+    fn every_read_setting_is_an_accepted_file_key() {
+        const ENVIRONMENT_ONLY: &[&str] = &["CC_CONFIG_FILE"];
+        for source in [include_str!("../config.rs"), include_str!("auth.rs")] {
+            for part in source.split("get(\"").skip(1) {
+                let key = part.split('"').next().unwrap_or_default();
+                if key.starts_with("CC_") && !ENVIRONMENT_ONLY.contains(&key) {
+                    assert!(keys::KEYS.contains(&key), "{key} is read but not accepted");
+                }
+            }
+        }
+    }
+
     #[test]
     fn preserves_password_literals_and_environment_precedence() {
         let password = format!("{} ${{HOME}} # ' \\\" ", uuid::Uuid::new_v4());

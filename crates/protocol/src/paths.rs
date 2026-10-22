@@ -12,6 +12,13 @@ pub const AUTH_PASSWORD_FORGOT: &str = "/v1/auth/password/forgot";
 pub const AUTH_PASSWORD_RESET: &str = "/v1/auth/password/reset";
 pub const AUTH_PASSWORD_CHANGE: &str = "/v1/auth/password/change";
 pub const AUTH_EMAIL_VERIFY: &str = "/v1/auth/email/verify";
+/// Enterprise sign-in (protocol 1.8), see [`crate::enterprise_auth`].
+/// Opened in the system browser, answers with a redirect to the IdP.
+pub const AUTH_OIDC_START: &str = "/v1/auth/oidc/start";
+/// Redirect URI registered at the IdP (server-side, not called by apps).
+pub const AUTH_OIDC_CALLBACK: &str = "/v1/auth/oidc/callback";
+pub const AUTH_OIDC_EXCHANGE: &str = "/v1/auth/oidc/exchange";
+pub const AUTH_LDAP_LOGIN: &str = "/v1/auth/ldap/login";
 
 pub const DEVICES: &str = "/v1/devices";
 pub const DEVICE: &str = "/v1/devices/{device_id}";

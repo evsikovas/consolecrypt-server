@@ -200,6 +200,49 @@ the server default applies. Integers are rendered without exponent notation.
   "CC_MAIL_TRANSPORT" .Values.mail.transport
   "CC_MAIL_FROM" .Values.mail.from
 }}
+{{- $a := .Values.auth | default dict }}
+{{- if eq (toString $a.mode) "enterprise" }}
+{{- $dir := "/run/secrets/consolecrypt-auth" }}
+{{- $_ := set $env "CC_AUTH_MODE" "enterprise" }}
+{{- $_ := set $env "CC_AUTH_PROVIDER" $a.provider }}
+{{- $_ := set $env "CC_AUTH_DISPLAY_NAME" $a.displayName }}
+{{- $_ := set $env "CC_AUTH_ALLOWED_DOMAINS" (join "," ($a.allowedDomains | default list)) }}
+{{- $_ := set $env "CC_AUTH_AUTO_CREATE" $a.autoCreate }}
+{{- $_ := set $env "CC_AUTH_RECHECK_MINUTES" $a.recheckMinutes }}
+{{- $_ := set $env "CC_AUTH_RECHECK_GRACE_HOURS" $a.recheckGraceHours }}
+{{- if eq (toString $a.provider) "oidc" }}
+{{- $o := $a.oidc }}
+{{- $_ := set $env "CC_OIDC_PRESET" $o.preset }}
+{{- $_ := set $env "CC_OIDC_ISSUER" $o.issuer }}
+{{- $_ := set $env "CC_OIDC_CLIENT_ID" $o.clientId }}
+{{- $_ := set $env "CC_OIDC_SCOPES" $o.scopes }}
+{{- $_ := set $env "CC_OIDC_EMAIL_CLAIM" $o.emailClaim }}
+{{- $_ := set $env "CC_OIDC_REQUIRED_CLAIM" $o.requiredClaim }}
+{{- $_ := set $env "CC_OIDC_REQUIRE_MFA" $o.requireMfa }}
+{{- $_ := set $env "CC_OIDC_MFA_ACR_VALUES" $o.mfaAcrValues }}
+{{- $_ := set $env "CC_OIDC_TOKEN_AUTH_METHOD" $o.tokenAuthMethod }}
+{{- $_ := set $env "CC_OIDC_CLIENT_SECRET_FILE" (printf "%s/%s" $dir $o.clientSecretKey) }}
+{{- $_ := set $env "CC_OIDC_TOKEN_KEY_FILE" (printf "%s/%s" $dir $o.tokenKeyKey) }}
+{{- if $o.caKey }}{{- $_ := set $env "CC_OIDC_CA_FILE" (printf "%s/%s" $dir $o.caKey) }}{{- end }}
+{{- end }}
+{{- if eq (toString $a.provider) "ldap" }}
+{{- $l := $a.ldap }}
+{{- $_ := set $env "CC_LDAP_URL" $l.url }}
+{{- $_ := set $env "CC_LDAP_STARTTLS" $l.starttls }}
+{{- $_ := set $env "CC_LDAP_BIND_DN" $l.bindDn }}
+{{- $_ := set $env "CC_LDAP_BASE_DN" $l.baseDn }}
+{{- $_ := set $env "CC_LDAP_USER_FILTER" $l.userFilter }}
+{{- $_ := set $env "CC_LDAP_EMAIL_ATTR" $l.emailAttr }}
+{{- $_ := set $env "CC_LDAP_ID_ATTR" $l.idAttr }}
+{{- $_ := set $env "CC_LDAP_REQUIRED_GROUP" $l.requiredGroup }}
+{{- $_ := set $env "CC_LDAP_TIMEOUT_SECS" $l.timeoutSecs }}
+{{- $_ := set $env "CC_LDAP_MAX_FAILURES" $l.maxFailures }}
+{{- $_ := set $env "CC_LDAP_FAILURE_WINDOW_MINUTES" $l.failureWindowMinutes }}
+{{- $_ := set $env "CC_LDAP_MAX_FAILURES_PER_IP" $l.maxFailuresPerIp }}
+{{- $_ := set $env "CC_LDAP_BIND_PASSWORD_FILE" (printf "%s/%s" $dir $l.bindPasswordKey) }}
+{{- if $l.caKey }}{{- $_ := set $env "CC_LDAP_CA_FILE" (printf "%s/%s" $dir $l.caKey) }}{{- end }}
+{{- end }}
+{{- end }}
 {{- if eq .Values.mail.transport "smtp" }}
 {{- $_ := set $env "CC_SMTP_HOST" .Values.mail.smtp.host }}
 {{- $_ := set $env "CC_SMTP_PORT" .Values.mail.smtp.port }}
@@ -308,6 +351,18 @@ list items; empty when there are none.
 {{- end }}
 
 {{/*
+Existing Secret mounted at /run/secrets/consolecrypt-auth (enterprise sign-in),
+or empty.
+*/}}
+{{- define "consolecrypt-server.authSecret" -}}
+{{- $a := .Values.auth | default dict }}
+{{- if eq (toString $a.mode) "enterprise" }}
+{{- if eq (toString $a.provider) "oidc" }}{{ $a.oidc.existingSecret }}{{ end }}
+{{- if eq (toString $a.provider) "ldap" }}{{ $a.ldap.existingSecret }}{{ end }}
+{{- end }}
+{{- end }}
+
+{{/*
 "true" when some database is configured.
 */}}
 {{- define "consolecrypt-server.hasDatabase" -}}
@@ -342,6 +397,34 @@ Validate values; fails rendering with a clear message.
 {{- end }}
 {{- if not (has (toString $v.mail.smtp.tls) (list "tls" "starttls" "none")) }}
 {{- fail "mail.smtp.tls must be tls, starttls or none" }}
+{{- end }}
+{{- end }}
+{{- $a := $v.auth | default dict }}
+{{- if not (has (toString ($a.mode | default "standard")) (list "standard" "enterprise")) }}
+{{- fail "auth.mode must be standard or enterprise" }}
+{{- end }}
+{{- if eq (toString $a.mode) "enterprise" }}
+{{- if not (has (toString $a.provider) (list "oidc" "ldap")) }}
+{{- fail "auth.mode=enterprise requires auth.provider=oidc or ldap" }}
+{{- end }}
+{{- if eq (toString $a.provider) "oidc" }}
+{{- if not (and $a.oidc.issuer $a.oidc.clientId) }}
+{{- fail "auth.provider=oidc requires auth.oidc.issuer and auth.oidc.clientId" }}
+{{- end }}
+{{- if not $a.oidc.existingSecret }}
+{{- fail "auth.provider=oidc requires auth.oidc.existingSecret (keys client-secret and token-key)" }}
+{{- end }}
+{{- if not (hasPrefix "https://" (toString $v.config.publicUrl)) }}
+{{- fail "auth.provider=oidc requires config.publicUrl (https://…): the IdP redirects to <publicUrl>/v1/auth/oidc/callback" }}
+{{- end }}
+{{- end }}
+{{- if eq (toString $a.provider) "ldap" }}
+{{- if not (and $a.ldap.url $a.ldap.bindDn $a.ldap.baseDn $a.ldap.existingSecret) }}
+{{- fail "auth.provider=ldap requires auth.ldap.url, bindDn, baseDn and existingSecret" }}
+{{- end }}
+{{- if and (hasPrefix "ldap://" (lower (toString $a.ldap.url))) (not $a.ldap.starttls) }}
+{{- fail "auth.ldap.url: plain ldap:// is refused; use ldaps:// or auth.ldap.starttls=true" }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if and $v.postgresql.enabled (or $v.database.url $v.database.existingSecret) }}

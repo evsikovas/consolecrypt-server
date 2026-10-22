@@ -82,8 +82,23 @@ enum AdminCommand {
         #[arg(long)]
         email: String,
     },
-    /// List accounts (email, status, device and vault counts).
+    /// List accounts (email, status, sign-in method, device and vault counts).
     ListUsers,
+    /// Enterprise sign-in: status and checks of the IdP / directory.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    /// Enterprise sign-in: link or unlink an account and an IdP/directory identity.
+    Identity {
+        #[command(subcommand)]
+        command: IdentityCommand,
+    },
+    /// Sessions of an account.
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
     /// After restoring the database from a backup: rotate vault epochs so
     /// clients detect the rollback and re-upload what the backup lacks.
     #[command(group(clap::ArgGroup::new("target").required(true).args(["vault", "all"])))]
@@ -94,6 +109,54 @@ enum AdminCommand {
         /// Every vault on this server.
         #[arg(long)]
         all: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthCommand {
+    /// Mode, provider, last IdP/directory check, linked accounts.
+    Status,
+    /// Check the configuration (discovery/JWKS or LDAP connect/TLS/bind) and,
+    /// with --login, try that user (LDAP) or re-check its account (OIDC).
+    Test {
+        /// LDAP login or OIDC account email to try.
+        #[arg(long)]
+        login: Option<String>,
+        /// LDAP: read the user's password from the first line of stdin and
+        /// try a real bind (counts towards the directory lockout policy).
+        #[arg(long, requires = "login")]
+        password_stdin: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum IdentityCommand {
+    /// Link an account to an identity: OIDC `sub` or LDAP objectGUID. The
+    /// account password is removed and its sessions are signed out.
+    Link {
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        subject: String,
+        /// Defaults to the configured CC_OIDC_ISSUER / LDAP base DN.
+        #[arg(long)]
+        issuer: Option<String>,
+    },
+    /// Remove the account's identities (or only the one with --subject).
+    Unlink {
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        subject: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    /// Sign out every session of an account.
+    Revoke {
+        #[arg(long)]
+        email: String,
     },
 }
 
@@ -161,10 +224,56 @@ async fn run_admin(pool: &sqlx::PgPool, config: &Config, cmd: AdminCommand) -> a
         AdminCommand::ListUsers => {
             for u in admin::list_users(pool).await? {
                 println!(
-                    "{}  {}  status={}  verified={}  devices={}  vaults={}",
-                    u.id, u.email, u.status, u.email_verified, u.devices, u.vaults
+                    "{}  {}  status={}  sign_in={}  verified={}  devices={}  vaults={}",
+                    u.id, u.email, u.status, u.sign_in, u.email_verified, u.devices, u.vaults
                 );
             }
+        }
+        AdminCommand::Auth {
+            command: AuthCommand::Status,
+        } => {
+            for line in admin::auth_status(pool, config).await? {
+                println!("{line}");
+            }
+        }
+        AdminCommand::Auth {
+            command:
+                AuthCommand::Test {
+                    login,
+                    password_stdin,
+                },
+        } => {
+            let password = if password_stdin {
+                Some(admin::read_password_stdin()?)
+            } else {
+                None
+            };
+            for line in admin::auth_test(pool, config, login.as_deref(), password).await? {
+                println!("{line}");
+            }
+        }
+        AdminCommand::Identity {
+            command:
+                IdentityCommand::Link {
+                    email,
+                    subject,
+                    issuer,
+                },
+        } => {
+            let n = admin::identity_link(pool, config, &email, &subject, issuer.as_deref()).await?;
+            println!("identity linked; account password removed; {n} session(s) revoked");
+        }
+        AdminCommand::Identity {
+            command: IdentityCommand::Unlink { email, subject },
+        } => {
+            let n = admin::identity_unlink(pool, &email, subject.as_deref()).await?;
+            println!("{n} identity link(s) removed");
+        }
+        AdminCommand::Session {
+            command: SessionCommand::Revoke { email },
+        } => {
+            let n = admin::session_revoke(pool, &email).await?;
+            println!("{n} session(s) revoked");
         }
     }
     Ok(())
