@@ -34,6 +34,16 @@ pub const VAULT: &str = "/v1/vaults/{vault_id}";
 pub const VAULT_ENVELOPES: &str = "/v1/vaults/{vault_id}/envelopes";
 pub const VAULT_ENVELOPE: &str = "/v1/vaults/{vault_id}/envelopes/{envelope_id}";
 
+// teams (protocol 1.10)
+pub const TEAMS: &str = "/v1/teams";
+pub const TEAM: &str = "/v1/teams/{vault_id}";
+pub const TEAM_LOG: &str = "/v1/teams/{vault_id}/log";
+pub const TEAM_KEY: &str = "/v1/teams/{vault_id}/key";
+pub const TEAM_INVITATIONS: &str = "/v1/teams/{vault_id}/invitations";
+pub const TEAM_INVITATIONS_INBOX: &str = "/v1/teams/invitations";
+pub const TEAM_INVITATION: &str = "/v1/teams/invitations/{invitation_id}";
+pub const TEAM_INVITATION_ACCEPT: &str = "/v1/teams/invitations/{invitation_id}/accept";
+
 pub const SYNC_PUSH: &str = "/v1/sync/push";
 pub const SYNC_CHANGES: &str = "/v1/sync/changes";
 pub const SYNC_SNAPSHOT: &str = "/v1/sync/snapshot";

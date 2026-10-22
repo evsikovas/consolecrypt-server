@@ -31,6 +31,7 @@ pub mod sharing;
 pub mod sharing_enrollment;
 pub mod sharing_notes;
 pub mod sync;
+pub mod teams;
 pub mod vaults;
 pub mod version;
 

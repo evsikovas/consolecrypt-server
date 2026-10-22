@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Protocol 1.10 (2026-10-22, server 0.2.1, additive): **teams**, advertised as
+  `capabilities.teams` in `/v1/meta` (`CC_TEAMS_ENABLED`, default on).
+  - A team is a vault of kind `team` (`/v1/vaults` keeps listing personal
+    vaults only; device trust requests never cover teams). Members reach the
+    VRK through a user envelope (`recipient_type = user`, `recipient_id =
+    user_id`) sealed to their per-team identity key; devices attest with the
+    VAK as for personal vaults.
+  - Signed, hash-chained membership log (`cc_protocol::teams`:
+    `team_log_message`, `team_log_hash_input`): genesis, add_member,
+    change_role, remove_member, leave, transfer_owner, rotate_key. Clients
+    verify it from genesis; the server checks order, signature and roles.
+  - `POST/GET /v1/teams`, `GET /v1/teams/{id}`, `GET|POST /v1/teams/{id}/log`,
+    `GET /v1/teams/{id}/key`, `GET|POST /v1/teams/{id}/invitations`,
+    `GET /v1/teams/invitations`, `POST /v1/teams/invitations/{id}/accept`,
+    `DELETE /v1/teams/invitations/{id}`. Invitations always answer `202`.
+  - Member code: `SHA-256(team_member_code_input(..))`, rendered like the
+    device code; the inviter compares it with the invitee.
+  - Viewers cannot push (`403`, `details.reason = "team_role"`).
+  - Removal revokes the member's user envelope and device trust markers and
+    sets `rotation_required`; `rotate_key` replaces all user envelopes,
+    the vault access key and adds a key-chain link to the previous epoch.
+  - Events: `team_invitation_received`, `team_join_requested`,
+    `team_membership_changed`, `team_key_rotated`, `team_removed`.
+  - Migration `0012_teams`.
+
 - Protocol 1.9 (2026-10-22, server 0.2.0, additive): enterprise sign-in mode
   (`cc_protocol::enterprise_auth`) and shared notes
   (`cc_protocol::sharing_notes`). Servers in the default `standard` mode

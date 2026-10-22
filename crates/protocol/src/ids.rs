@@ -118,6 +118,10 @@ define_id!(
     DeviceRequestId
 );
 define_id!(
+    /// An invitation into a team (protocol 1.10). Server-generated.
+    TeamInvitationId
+);
+define_id!(
     /// Per-request correlation id (echoed in `x-request-id` and in errors).
     RequestId
 );

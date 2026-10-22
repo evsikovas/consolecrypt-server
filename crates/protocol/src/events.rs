@@ -14,7 +14,7 @@
 //!   with expired or was rotated: refresh if needed and reconnect (1.4).
 
 use crate::envelopes::RecipientType;
-use crate::ids::{DeviceId, DeviceRequestId, SessionId, VaultId};
+use crate::ids::{DeviceId, DeviceRequestId, SessionId, TeamInvitationId, VaultId};
 use crate::version::{Platform, ProtocolVersion};
 use crate::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,29 @@ pub enum ServerEvent {
         session_id: SessionId,
     },
     TeamMembershipChangedFuture {
+        vault_id: VaultId,
+    },
+    /// Teams (protocol 1.10): the caller was invited into a team.
+    TeamInvitationReceived {
+        invitation_id: TeamInvitationId,
+    },
+    /// An invitee accepted: the inviter compares the member code.
+    TeamJoinRequested {
+        vault_id: VaultId,
+        invitation_id: TeamInvitationId,
+    },
+    /// The membership log grew (member added, role changed, left, …).
+    TeamMembershipChanged {
+        vault_id: VaultId,
+        log_seq: u64,
+    },
+    /// The team key was rotated; fetch `GET /v1/teams/{id}/key`.
+    TeamKeyRotated {
+        vault_id: VaultId,
+        key_epoch: u32,
+    },
+    /// The caller is no longer a member (removed, left, team deleted).
+    TeamRemoved {
         vault_id: VaultId,
     },
     /// Forward compatibility: any event type this build does not know.

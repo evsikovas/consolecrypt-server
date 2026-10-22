@@ -60,6 +60,9 @@ pub struct ServerCapabilities {
     /// decodes as `standard` (email + account password).
     #[serde(default)]
     pub auth: AuthCapability,
+    /// Teams (protocol 1.10): `/v1/teams/*`, team vaults and their events.
+    #[serde(default)]
+    pub teams: bool,
 }
 
 /// `capabilities.auth` (protocol 1.9): the sign-in method of this server.
