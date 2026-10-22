@@ -14,8 +14,10 @@
 [настройки Docker Compose и Helm](HOSTING.md). Включение функции не публикует
 личные данные: отправка выбранного элемента требует явного действия владельца.
 
-Существующие профили с адресом `https://consolecrypt.evsikov.net` продолжают
-работать; менять адрес сервера в них не требуется.
+Аккаунты прежнего сервера `https://consolecrypt.evsikov.net` сохранены на
+`https://sync.consolecrypt.dev`; используйте прежние email и пароль. Старый
+домен сейчас недоступен. Адрес существующего профиля автоматически не меняется:
+сохраните резервную копию перед перенастройкой сервера.
 
 В клиенте **0.2.0 и новее** нажмите **Совместный доступ → Обновить общие данные**,
 чтобы повторно проверить возможности сервера после их включения или сетевой
@@ -166,8 +168,10 @@ and later**, use **Sharing → Refresh shared data** after support is enabled or
 connection fails. Connection and authentication errors are shown separately from
 unavailable support. Upgrade an older client if its refresh button stays disabled.
 
-Existing profiles using `https://consolecrypt.evsikov.net` continue to work;
-you do not need to change their server URL.
+Accounts from `https://consolecrypt.evsikov.net` are retained at
+`https://sync.consolecrypt.dev`; use your existing email and password.
+The old domain is currently unavailable. Existing profile URLs do not change
+automatically; save a backup before reconfiguring the server.
 
 Share selected hosts, snippets, collections or individual secrets with verified
 devices on the same compatible server. Compare the entire device code over an
