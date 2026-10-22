@@ -99,6 +99,12 @@ async fn secrets_never_reach_the_logs() {
         &a.access,
     )
     .await;
+    srv.post(
+        cc_protocol::sharing::RECIPIENT_LOOKUP_PATH,
+        Some(&a.access),
+        &json!({ "email": a.email }),
+    )
+    .await;
     let mut malformed = share;
     malformed.access.signature = random::<64>().to_vec().into();
     srv.post("/v1/shares", Some(&a.access), &malformed).await;

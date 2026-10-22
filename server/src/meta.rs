@@ -16,6 +16,8 @@ use cc_protocol::{ProtocolVersion, PROTOCOL_VERSION};
 pub const MINIMUM_SUPPORTED_PROTOCOL: ProtocolVersion = ProtocolVersion::new(1, 0);
 
 pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
+    // Same gate as `sharing::require_enabled`.
+    let sharing = state.config.object_sharing_enabled && state.config.require_request_proof;
     ServerInfo {
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
         protocol_version: PROTOCOL_VERSION,
@@ -26,6 +28,9 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
         source_code_url: Some(state.config.source_code_url.clone()),
         capabilities: ServerCapabilities {
             device_protection: state.config.device_protection.enabled,
+            share_leave: sharing,
+            share_restore: sharing,
+            recipient_lookup_post: sharing,
         },
     }
 }

@@ -1,5 +1,4 @@
--- share_notes_v1: notes travelling with a shared object. 0009/0010 are claimed
--- by parallel branches (teams, owner delete); renumber at merge if needed.
+-- share_notes_v1 (protocol 1.9): notes travelling with a shared object.
 -- Ciphertext only: the notes key of an epoch is wrapped per member device and
 -- signed by the owner device; notes are signed by their author device.
 

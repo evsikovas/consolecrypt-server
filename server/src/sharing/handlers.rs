@@ -21,8 +21,11 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/shares/capabilities", get(capabilities))
         .route("/v1/shares/recipients", get(recipient))
+        .route(RECIPIENT_LOOKUP_PATH, post(recipient_lookup))
         .route("/v1/shares", get(list).post(create))
+        .route(DELETED_PATH, get(deleted))
         .route("/v1/shares/{id}", get(read))
+        .route("/v1/shares/{id}/leave", post(leave))
         .route("/v1/shares/{id}/revisions", post(put))
         .route("/v1/shares/{id}/access", post(rotate))
         .route("/v1/shares/{id}/history", get(history))
@@ -60,6 +63,27 @@ async fn put(
     ApiJson(req): ApiJson<PutSharedRevisionRequest>,
 ) -> AppResult<Json<SharedItemState>> {
     Ok(Json(service::put(&s, &a, id, req).await?))
+}
+async fn leave(
+    State(s): State<AppState>,
+    a: AuthContext,
+    ApiPath(id): ApiPath<ShareId>,
+) -> AppResult<StatusCode> {
+    service::leave(&s, &a, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+#[derive(Deserialize)]
+struct DeletedQuery {
+    after: Option<ShareId>,
+    #[serde(default = "page_limit")]
+    limit: u32,
+}
+async fn deleted(
+    State(s): State<AppState>,
+    a: AuthContext,
+    ApiQuery(q): ApiQuery<DeletedQuery>,
+) -> AppResult<Json<DeletedShareListPage>> {
+    Ok(Json(service::deleted(&s, &a, q.after, q.limit).await?))
 }
 async fn rotate(
     State(s): State<AppState>,
@@ -130,6 +154,15 @@ async fn history(
 struct RecipientQuery {
     email: String,
 }
+/// Same lookup as `recipient`, without the e-mail in the URL (protocol 1.8).
+async fn recipient_lookup(
+    State(s): State<AppState>,
+    a: AuthContext,
+    ApiJson(req): ApiJson<RecipientLookupRequest>,
+) -> AppResult<Json<SharingRecipient>> {
+    Ok(Json(service::recipient(&s, &a, &req.email).await?))
+}
+/// Deprecated in protocol 1.8: kept for older clients.
 async fn recipient(
     State(s): State<AppState>,
     a: AuthContext,

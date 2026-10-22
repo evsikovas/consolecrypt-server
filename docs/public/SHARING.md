@@ -66,6 +66,23 @@
 Парольная фраза SSH-ключа передаётся отдельно; она не прикрепляется к ключу
 автоматически. Секреты не попадают в ИИ или в общий просмотр метаданных.
 
+## Общие заметки
+
+Если сервер поддерживает общие заметки (`supports_notes_v1`), в правой панели
+«Заметки» в режиме «Объект» у общего хоста, базы данных или контекста Kubernetes
+появляется блок «Общие заметки». Их видят все участники объекта; писать может
+любой участник, изменить заметку — только её автор, удалить — автор или
+владелец. Заметка к Docker-контейнеру общего SSH-хоста или к ресурсу общего
+контекста видна только у этого контейнера или ресурса. Задачи и напоминания
+остаются личными.
+
+Заметки шифруются на устройстве. Ключ заметок выдаёт устройство владельца и
+подписывает его; сервер не может подменить ключ или прочитать текст. Пока
+владелец ни разу не открыл панель заметок для объекта, участники видят
+сообщение об ожидании. После исключения участника устройство владельца при
+следующем открытии панели перешифровывает заметки новым ключом; исключённый
+участник новые заметки больше не получает.
+
 ## Несколько устройств коллеги
 
 Личное рабочее место синхронизируется обычным подтверждением устройств. Доступ
@@ -91,6 +108,26 @@
 Новое устройство не может повысить свою роль или пригласить другого пользователя.
 После перезапуска владельца может потребоваться новая проверка владения ключом.
 Отключение разрешения сохраняется локально даже при недоступном сервере.
+
+## Удаление, выход и восстановление
+
+Удалить общий элемент может только его владелец: начиная с сервера **0.1.17**
+сервер отклоняет удаление от редактора (`owner_only`), в том числе от старых
+клиентов, поэтому данные владельца не теряются. Получатели теряют доступ сразу.
+Сервер хранит последнее зашифрованное содержимое удалённого элемента
+**30 дней**: в клиенте **0.8.7** и новее откройте **Я поделился → Недавно
+удалённые** и нажмите **Восстановить**. Элемент публикуется заново с теми же
+устройствами, кроме вышедших из доступа; получатели снова принимают его, сравнив
+код владельца. Через 30 дней остаётся только подписанная отметка удаления.
+Удалённые элементы в пределах этого срока учитываются в лимите общих элементов.
+
+Получатель может в любой момент выбрать **Выйти из общего доступа** в карточке
+элемента или во входящем приглашении. Все его устройства сразу теряют доступ на
+сервере, элемент исчезает из списка, а сохранённые личные копии остаются.
+Владелец видит, что участник вышел; при следующем изменении прав этот участник
+исключается из подписанного списка. Повторно добавить его можно только новым
+приглашением. Эти действия доступны, если сервер сообщает о поддержке; на
+старом сервере кнопки скрыты.
 
 ## Отзыв, конфликты и восстановление
 
@@ -139,6 +176,17 @@ change the item. Receiving a snippet never executes it. Your personal vault key
 is never shared. Hosts exclude passwords, private keys and personal credential
 references; recipients use their own credentials.
 
+Shared notes appear under **Notes → Object** for a shared host, database
+connection or Kubernetes context when the server supports them
+(`supports_notes_v1`). Every member reads them; any member writes, only the
+author edits, the author or the owner deletes. A note about a Docker container
+of a shared SSH host or a resource of a shared context stays with that container
+or resource. Tasks and reminders remain personal. Notes are encrypted on the
+device under a notes key that the owner device issues and signs, so the server
+can neither read them nor substitute the key. Members wait until the owner has
+opened the notes panel for the object once. After a member is removed, the
+owner's device moves the notes to a new key the next time the panel opens.
+
 Collections reference independently shared items and do not grant inherited
 access. Secret sharing requires a separate explicit confirmation. Values remain
 masked until revealed; copying rechecks current access. An SSH key's passphrase
@@ -152,6 +200,19 @@ encrypted possession challenge and rotate the item key. Optional automatic
 acceptance processes only already endorsed requests covered by an explicit
 Automatic grant. Public pairing packets contain no private keys or item values;
 import alone does not establish trust.
+
+Only the owner can delete a shared item: from server **0.1.17** an editor's
+delete is rejected (`owner_only`), including from older clients, so the owner's
+data is never lost. Recipients lose access immediately. The server keeps the
+last encrypted content of a deleted item for **30 days**; in client **0.8.7**
+and later use **Shared by me → Recently deleted → Restore**. The item is shared
+again with the same devices except those who left, and recipients accept it
+again after comparing the owner code. Restorable items count toward the shared
+item quota. A recipient can **Leave share** from the item or an incoming
+invitation at any time: all their devices lose server access, the item leaves
+their list and saved personal copies stay. The owner sees that the member left;
+the next access change drops them from the signed manifest. Both actions appear
+only when the server advertises support.
 
 Revocation prevents access to future keys and server requests. It cannot erase
 data already read or copied, or rotate credentials on the destination SSH server.

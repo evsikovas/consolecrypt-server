@@ -64,6 +64,17 @@ pub(super) async fn role(
     .ok_or_else(AppError::not_found)
 }
 
+/// Whether the account left this shared item (protocol 1.8).
+pub(super) async fn departed(conn: &mut PgConnection, share: Uuid, user: Uuid) -> AppResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM shared_item_departures WHERE share_id=$1 AND user_id=$2)",
+    )
+    .bind(share)
+    .bind(user)
+    .fetch_one(conn)
+    .await?)
+}
+
 /// Called only after signatures, identity/key bindings and the old-state CAS
 /// have been checked. The transaction owns the item lock until commit.
 pub(super) async fn save(

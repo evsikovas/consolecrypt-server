@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "consolecrypt-server"
-version = "0.1.16"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "argon2",

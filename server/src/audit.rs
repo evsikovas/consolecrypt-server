@@ -54,6 +54,8 @@ pub enum AuditType {
     ShareEnrollmentChallenge,
     ShareEnrollmentResponse,
     ShareEnrollmentAccepted,
+    ShareLeft,
+    ShareRestored,
 }
 
 impl AuditType {
@@ -100,6 +102,8 @@ impl AuditType {
             AuditType::ShareEnrollmentChallenge => "share_enrollment_challenge",
             AuditType::ShareEnrollmentResponse => "share_enrollment_response",
             AuditType::ShareEnrollmentAccepted => "share_enrollment_accepted",
+            AuditType::ShareLeft => "share_left",
+            AuditType::ShareRestored => "share_restored",
         }
     }
 }

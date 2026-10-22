@@ -65,7 +65,7 @@ async fn default_off_and_http_signed_lifecycle() {
     );
     assert_eq!(
         srv.get("/v1/meta", &owner.access).await.1["protocol_version"],
-        "1.7"
+        "1.9"
     );
 }
 #[tokio::test]
@@ -238,9 +238,25 @@ async fn editor_cannot_replace_owner_and_tombstone_is_final() {
     delete.signed.mutation.operation = SharingOperation::Delete;
     delete.body = None;
     sign_revision(&editor, &mut delete);
+    assert_eq!(
+        service::put(
+            &srv.state,
+            &context(&editor),
+            id,
+            PutSharedRevisionRequest { revision: delete },
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        ErrorCode::OwnerOnly
+    );
+    let mut delete = revision(&owner, &old.access.manifest, Some(&old.revision));
+    delete.signed.mutation.operation = SharingOperation::Delete;
+    delete.body = None;
+    sign_revision(&owner, &mut delete);
     let deleted = service::put(
         &srv.state,
-        &context(&editor),
+        &context(&owner),
         id,
         PutSharedRevisionRequest { revision: delete },
     )

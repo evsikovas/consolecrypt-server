@@ -42,6 +42,20 @@ pub struct ServerCapabilities {
     /// `envelope_rate_limited`.
     #[serde(default)]
     pub device_protection: bool,
+    /// A recipient may leave a shared item (`POST /v1/shares/{id}/leave`,
+    /// protocol 1.8). Only shared-item owners may delete it.
+    #[serde(default)]
+    pub share_leave: bool,
+    /// A deleted shared item stays restorable by its owner for
+    /// [`crate::sharing::RESTORE_WINDOW_DAYS`] (`GET /v1/shares/deleted`,
+    /// `CreateShareRequest.restored_from`, protocol 1.8).
+    #[serde(default)]
+    pub share_restore: bool,
+    /// Sharing recipient lookup by `POST /v1/shares/recipients/lookup`
+    /// with the e-mail in the body (protocol 1.8); clients then stop
+    /// putting the address into `GET /v1/shares/recipients?email=`.
+    #[serde(default)]
+    pub recipient_lookup_post: bool,
 }
 
 fn default_true() -> bool {
@@ -63,6 +77,8 @@ mod tests {
         assert!(info.registration_open);
         assert!(info.source_code_url.is_none());
         assert!(!info.capabilities.device_protection);
+        assert!(!info.capabilities.share_leave);
+        assert!(!info.capabilities.share_restore);
     }
 
     #[test]
@@ -75,5 +91,21 @@ mod tests {
         });
         let info: ServerInfo = serde_json::from_value(v).unwrap();
         assert!(info.capabilities.device_protection);
+        assert!(!info.capabilities.share_leave);
+    }
+
+    #[test]
+    fn share_capabilities_1_8() {
+        let v = serde_json::json!({
+            "server_version": "0.1.17",
+            "protocol_version": "1.8",
+            "minimum_supported_protocol": "1.0",
+            "capabilities": { "share_leave": true, "share_restore": true }
+        });
+        let info: ServerInfo = serde_json::from_value(v).unwrap();
+        assert!(info.capabilities.share_leave);
+        assert!(info.capabilities.share_restore);
+        assert!(!info.capabilities.device_protection);
+        assert!(!info.capabilities.recipient_lookup_post);
     }
 }

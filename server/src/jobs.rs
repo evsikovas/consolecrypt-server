@@ -56,6 +56,8 @@ pub struct MaintenanceReport {
     pub protection_rows_deleted: u64,
     pub sync_mutations_deleted: u64,
     pub vaults_purged: u64,
+    /// Retained content of owner-deleted shared items past the restore window.
+    pub shared_restores_expired: u64,
     pub audit_events_deleted: u64,
 }
 
@@ -187,6 +189,16 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<MaintenanceReport> {
             .await?
             .rows_affected();
         }
+        // The signed tombstone stays; only the restorable ciphertext goes.
+        report.shared_restores_expired = sqlx::query(
+            "UPDATE shared_items SET restore_revision = NULL
+              WHERE restore_revision IS NOT NULL
+                AND deleted_at < now() - make_interval(days => $1)",
+        )
+        .bind(days(cc_protocol::sharing::RESTORE_WINDOW_DAYS))
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
         if r.audit_days > 0 {
             report.audit_events_deleted = sqlx::query(
                 "DELETE FROM audit_events WHERE occurred_at < now() - make_interval(days => $1)",

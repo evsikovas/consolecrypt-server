@@ -31,6 +31,9 @@ pub enum ErrorCode {
     /// protocol 1.7) and may not act on trusted devices yet. `details.until`
     /// is when the quarantine ends (RFC 3339).
     DeviceInQuarantine,
+    /// 403 — only the owner of a shared item may do this (protocol 1.8):
+    /// deleting a shared item. Recipients may leave the share instead.
+    OwnerOnly,
     /// 404 — resource does not exist or is not visible to the caller
     /// (no distinction, to avoid IDOR probing).
     NotFound,
@@ -70,7 +73,8 @@ impl ErrorCode {
             | ErrorCode::DeviceRevoked
             | ErrorCode::DeviceNotTrusted
             | ErrorCode::EmailNotVerified
-            | ErrorCode::DeviceInQuarantine => 403,
+            | ErrorCode::DeviceInQuarantine
+            | ErrorCode::OwnerOnly => 403,
             ErrorCode::NotFound => 404,
             ErrorCode::Conflict | ErrorCode::AlreadyExists => 409,
             ErrorCode::Gone => 410,
@@ -147,5 +151,13 @@ mod tests {
         assert_eq!(v, "envelope_rate_limited");
         assert_eq!(ErrorCode::EnvelopeRateLimited.http_status(), 429);
         assert!(ErrorCode::EnvelopeRateLimited.is_retryable());
+    }
+
+    #[test]
+    fn owner_only_code_1_8() {
+        let v = serde_json::to_value(ErrorCode::OwnerOnly).unwrap();
+        assert_eq!(v, "owner_only");
+        assert_eq!(ErrorCode::OwnerOnly.http_status(), 403);
+        assert!(!ErrorCode::OwnerOnly.is_retryable());
     }
 }

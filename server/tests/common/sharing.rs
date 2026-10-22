@@ -142,6 +142,7 @@ pub async fn request(
     CreateShareRequest {
         access: sign_manifest(owner, m),
         revision,
+        restored_from: None,
     }
 }
 pub async fn create(

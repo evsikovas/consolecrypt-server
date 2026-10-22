@@ -20,6 +20,16 @@ use uuid::Uuid;
 fn invalid(_: SharingValidationError) -> AppError {
     AppError::bad_request("invalid sharing payload")
 }
+fn owner_only() -> AppError {
+    AppError::new(
+        ErrorCode::OwnerOnly,
+        "only the owner may delete a shared item; leave the share instead",
+    )
+}
+/// Items a user owns that still occupy storage: live or restorable.
+const MAX_OWNED_ITEMS: i64 = 1000;
+/// Hard bound on all rows of one owner, including expired tombstones.
+const MAX_OWNED_ROWS: i64 = 10_000;
 fn conflict() -> AppError {
     AppError::new(
         ErrorCode::Conflict,
@@ -212,14 +222,48 @@ async fn check_instance(conn: &mut PgConnection, instance: Uuid) -> AppResult<()
     }
     Ok(())
 }
+/// Recipients who left stay outside the device ACL until the owner's next
+/// signed manifest drops them (acknowledged) or adds a device of theirs the
+/// previous manifest did not have (an explicit new invitation).
+async fn settle_departures(
+    conn: &mut PgConnection,
+    previous: &AccessManifest,
+    next: &AccessManifest,
+) -> AppResult<BTreeSet<Uuid>> {
+    let departed: Vec<Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM shared_item_departures WHERE share_id=$1")
+            .bind(Uuid::from(next.share_id))
+            .fetch_all(&mut *conn)
+            .await?;
+    let old_devices: BTreeSet<_> = previous.members.iter().map(|v| v.device_id).collect();
+    let mut still = BTreeSet::new();
+    for user in departed {
+        let devices: Vec<_> = next
+            .members
+            .iter()
+            .filter(|v| Uuid::from(v.user_id) == user)
+            .collect();
+        if devices.is_empty() || devices.iter().any(|v| !old_devices.contains(&v.device_id)) {
+            sqlx::query("DELETE FROM shared_item_departures WHERE share_id=$1 AND user_id=$2")
+                .bind(Uuid::from(next.share_id))
+                .bind(user)
+                .execute(&mut *conn)
+                .await?;
+        } else {
+            still.insert(user);
+        }
+    }
+    Ok(still)
+}
 async fn persist(
     conn: &mut PgConnection,
     access: &SignedAccessManifest,
     revision: &SharedRevision,
     revision_hash: [u8; 32],
     creating: bool,
-    manifest_changed: bool,
+    previous: Option<&AccessManifest>,
 ) -> AppResult<()> {
+    let manifest_changed = creating || previous.is_some();
     let m = &access.manifest;
     let row = StoredItem {
         id: m.share_id.into(),
@@ -250,9 +294,14 @@ async fn persist(
     if duplicate {
         return Err(conflict());
     }
+    let departed = match previous {
+        Some(previous) if !creating => settle_departures(conn, previous, m).await?,
+        _ => BTreeSet::new(),
+    };
     let members: Vec<_> = m
         .members
         .iter()
+        .filter(|v| !departed.contains(&Uuid::from(v.user_id)))
         .map(|v| {
             (
                 v.user_id.into(),
@@ -309,20 +358,89 @@ pub async fn create(
         .bind(format!("sharing-owner:{}", auth.user_id))
         .execute(&mut *tx)
         .await?;
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM shared_items WHERE owner_user_id=$1")
-        .bind(Uuid::from(auth.user_id))
-        .fetch_one(&mut *tx)
-        .await?;
-    if count >= 1000 {
+    let restoring = match req.restored_from {
+        Some(from) => Some(take_restorable(&mut tx, auth, from, m).await?),
+        None => None,
+    };
+    // Expired tombstones no longer count; a restore replaces its own entry.
+    let (live, rows): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE NOT deleted OR restore_revision IS NOT NULL), count(*)
+         FROM shared_items WHERE owner_user_id=$1",
+    )
+    .bind(Uuid::from(auth.user_id))
+    .fetch_one(&mut *tx)
+    .await?;
+    if live - i64::from(restoring.is_some()) >= MAX_OWNED_ITEMS || rows >= MAX_OWNED_ROWS {
         return Err(AppError::forbidden("shared item quota reached"));
     }
-    persist(&mut tx, &req.access, &req.revision, hash, true, true).await?;
+    persist(&mut tx, &req.access, &req.revision, hash, true, None).await?;
+    if let Some(from) = restoring {
+        sqlx::query("UPDATE shared_items SET restore_revision=NULL WHERE id=$1")
+            .bind(from)
+            .execute(&mut *tx)
+            .await?;
+        use crate::audit::{AuditEvent, AuditType};
+        AuditEvent::new(AuditType::ShareRestored)
+            .user(auth.user_id)
+            .device(auth.device_id)
+            .target(m.share_id)
+            .meta(serde_json::json!({ "restored_from": from }))
+            .record(&mut *tx)
+            .await?;
+    }
     super::auth::recheck_session(&mut tx, auth).await?;
     tx.commit().await?;
     Ok(SharedItemState {
         access: req.access,
         revision: req.revision,
     })
+}
+
+/// Checks a `restored_from` reference inside the create transaction (after
+/// identity locks) and returns the locked deleted item's id.
+async fn take_restorable(
+    conn: &mut PgConnection,
+    auth: &AuthContext,
+    from: ShareId,
+    next: &AccessManifest,
+) -> AppResult<Uuid> {
+    if from == next.share_id {
+        return Err(AppError::bad_request("invalid sharing restore source"));
+    }
+    let old = store::lock_item(&mut *conn, from.into(), true).await?;
+    if old.owner_user_id != Uuid::from(auth.user_id) {
+        return Err(AppError::not_found());
+    }
+    let restorable: bool = sqlx::query_scalar(
+        "SELECT deleted AND restore_revision IS NOT NULL
+                AND deleted_at > clock_timestamp() - make_interval(days => $2)
+         FROM shared_items WHERE id=$1",
+    )
+    .bind(old.id)
+    .bind(RESTORE_WINDOW_DAYS as i32)
+    .fetch_one(&mut *conn)
+    .await?;
+    if !restorable {
+        return Err(AppError::gone("shared item is not restorable"));
+    }
+    if state(&old)?.access.manifest.kind != next.kind {
+        return Err(AppError::bad_request("sharing restore kind mismatch"));
+    }
+    let departed: Vec<Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM shared_item_departures WHERE share_id=$1")
+            .bind(old.id)
+            .fetch_all(&mut *conn)
+            .await?;
+    if next
+        .members
+        .iter()
+        .any(|v| departed.contains(&Uuid::from(v.user_id)))
+    {
+        return Err(AppError::forbidden(
+            "a recipient who left cannot be added back by a restore",
+        ));
+    }
+    Ok(old.id)
 }
 
 pub async fn put(
@@ -433,6 +551,11 @@ async fn transition_in_transaction(
     }
     check_member_keys(current_member, &keys[&Uuid::from(auth.device_id)])?;
     let m = &revision.signed.mutation;
+    let deleting = m.operation == SharingOperation::Delete;
+    // A recipient with edit rights must never destroy the owner's item.
+    if deleting && previous.owner_user_id != auth.user_id {
+        return Err(owner_only());
+    }
     if m.base_revision != old.revision || m.previous_revision_hash.as_slice() != old.revision_hash {
         return Err(conflict());
     }
@@ -481,7 +604,25 @@ async fn transition_in_transaction(
         return Err(conflict());
     }
     check_fresh_body(&old_state.revision, &revision)?;
-    persist(&mut *conn, next, &revision, hash, false, access.is_some()).await?;
+    persist(
+        &mut *conn,
+        next,
+        &revision,
+        hash,
+        false,
+        access.is_some().then_some(previous),
+    )
+    .await?;
+    if deleting {
+        // Keep the last content (ciphertext and envelopes only) restorable.
+        sqlx::query(
+            "UPDATE shared_items SET deleted_at=clock_timestamp(), restore_revision=$2 WHERE id=$1",
+        )
+        .bind(old.id)
+        .bind(&old.current_mutation)
+        .execute(&mut *conn)
+        .await?;
+    }
     super::auth::recheck_session(&mut *conn, auth).await?;
     Ok((
         old_state,
@@ -588,14 +729,181 @@ pub async fn list_with_kinds(
         items.push(value);
     }
     let next_after = last_scanned.filter(|_| has_more);
+    let owned: Vec<Uuid> = items
+        .iter()
+        .filter(|v| v.access.manifest.owner_user_id == auth.user_id)
+        .map(|v| v.access.manifest.share_id.into())
+        .collect();
+    let departures = if owned.is_empty() {
+        vec![]
+    } else {
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT share_id, user_id FROM shared_item_departures
+             WHERE share_id = ANY($1) ORDER BY share_id, user_id",
+        )
+        .bind(owned)
+        .fetch_all(&mut *tx)
+        .await?;
+        rows.into_iter()
+            .map(|(share_id, user_id)| ShareDeparture {
+                share_id: share_id.into(),
+                user_id: user_id.into(),
+            })
+            .collect()
+    };
     super::auth::recheck_session(&mut tx, auth).await?;
     tx.commit().await?;
     Ok(ShareListPage {
         items,
         next_after,
         has_more,
+        departures,
     })
 }
+/// A recipient account leaves a shared item: all its devices lose server
+/// access at once. The owner sees the departure in `ShareListPage` and drops
+/// the account from the signed manifest with the next access change.
+pub async fn leave(state_: &AppState, auth: &AuthContext, id: ShareId) -> AppResult<()> {
+    require_enabled(state_)?;
+    let mut tx = state_.db.begin().await?;
+    let keys = lock_identities(&mut tx, auth, &[]).await?;
+    let row = store::lock_item(&mut tx, id.into(), true).await?;
+    store::role(
+        &mut tx,
+        id.into(),
+        auth.user_id.into(),
+        auth.device_id.into(),
+    )
+    .await?;
+    let access = state(&row)?.access.manifest;
+    if !kind_enabled(&state_.config, access.kind) {
+        return Err(AppError::not_found());
+    }
+    check_member_keys(member(&access, auth)?, &keys[&Uuid::from(auth.device_id)])?;
+    if access.owner_user_id == auth.user_id {
+        return Err(AppError::forbidden(
+            "the owner cannot leave a shared item; delete it instead",
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO shared_item_departures (share_id,user_id) VALUES ($1,$2)
+         ON CONFLICT (share_id,user_id) DO NOTHING",
+    )
+    .bind(row.id)
+    .bind(Uuid::from(auth.user_id))
+    .execute(&mut *tx)
+    .await?;
+    let devices = sqlx::query("DELETE FROM shared_item_devices WHERE share_id=$1 AND user_id=$2")
+        .bind(row.id)
+        .bind(Uuid::from(auth.user_id))
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    use crate::audit::{AuditEvent, AuditType};
+    AuditEvent::new(AuditType::ShareLeft)
+        .user(auth.user_id)
+        .device(auth.device_id)
+        .target(id)
+        .meta(serde_json::json!({ "devices": devices }))
+        .record(&mut *tx)
+        .await?;
+    super::auth::recheck_session(&mut tx, auth).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Owner-only listing of deleted items whose last content is retained.
+pub async fn deleted(
+    state_: &AppState,
+    auth: &AuthContext,
+    after: Option<ShareId>,
+    limit: u32,
+) -> AppResult<DeletedShareListPage> {
+    require_enabled(state_)?;
+    if limit == 0 || limit > MAX_PAGE_SIZE {
+        return Err(AppError::bad_request("invalid sharing page limit"));
+    }
+    let mut tx = state_.db.begin().await?;
+    let keys = lock_identities(&mut tx, auth, &[]).await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM shared_items
+         WHERE owner_user_id=$1 AND deleted AND restore_revision IS NOT NULL
+           AND deleted_at > clock_timestamp() - make_interval(days => $2) AND id>$3
+         ORDER BY id LIMIT $4",
+    )
+    .bind(Uuid::from(auth.user_id))
+    .bind(RESTORE_WINDOW_DAYS as i32)
+    .bind(Uuid::from(after.unwrap_or(ShareId::NIL)))
+    .bind(i64::from(limit) + 1)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut items = Vec::new();
+    let mut last_scanned = None;
+    let mut bytes = 0;
+    let mut has_more = ids.len() > limit as usize;
+    for id in ids.into_iter().take(limit as usize) {
+        let row = match authorized_item(
+            &state_.config,
+            &mut tx,
+            auth,
+            id.into(),
+            &keys[&Uuid::from(auth.device_id)],
+        )
+        .await
+        {
+            Ok(row) => row,
+            Err(e) if e.code() == ErrorCode::NotFound => {
+                last_scanned = Some(id.into());
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        type Retained = (
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<Json<SharedRevision>>,
+        );
+        let (deleted_at, retained): Retained =
+            sqlx::query_as("SELECT deleted_at, restore_revision FROM shared_items WHERE id=$1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let (Some(deleted_at), Some(last_revision)) = (deleted_at, retained) else {
+            last_scanned = Some(id.into());
+            continue;
+        };
+        let departed_user_ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT user_id FROM shared_item_departures WHERE share_id=$1 ORDER BY user_id",
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let value = DeletedSharedItem {
+            state: state(&row)?,
+            last_revision: last_revision.0,
+            deleted_at,
+            restorable_until: deleted_at + chrono::Duration::days(i64::from(RESTORE_WINDOW_DAYS)),
+            departed_user_ids: departed_user_ids.into_iter().map(Into::into).collect(),
+        };
+        bytes += serde_json::to_vec(&value)
+            .map_err(|_| AppError::internal("sharing serialization failed"))?
+            .len();
+        if bytes > state_.config.sync_page_bytes && !items.is_empty() {
+            has_more = true;
+            break;
+        }
+        last_scanned = Some(id.into());
+        items.push(value);
+    }
+    let next_after = last_scanned.filter(|_| has_more);
+    super::auth::recheck_session(&mut tx, auth).await?;
+    tx.commit().await?;
+    Ok(DeletedShareListPage {
+        items,
+        next_after,
+        has_more,
+    })
+}
+
 pub async fn history(
     state_: &AppState,
     auth: &AuthContext,
