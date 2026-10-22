@@ -19,6 +19,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod devices;
+pub mod enterprise;
 pub mod error;
 pub mod events;
 pub mod extract;
@@ -74,6 +75,23 @@ pub fn build_router(state: AppState) -> Router {
         .route(paths::RECOVERY_ACCOUNT_START, post(a::recovery_start))
         .route(paths::RECOVERY_ACCOUNT_CONFIRM, post(a::recovery_confirm))
         .route(paths::DEVICES_DENY, post(d::deny_device))
+        // Enterprise sign-in (protocol 1.8).
+        .route(
+            paths::AUTH_OIDC_START,
+            get(enterprise::handlers::oidc_start),
+        )
+        .route(
+            paths::AUTH_OIDC_CALLBACK,
+            get(enterprise::handlers::oidc_callback),
+        )
+        .route(
+            paths::AUTH_OIDC_EXCHANGE,
+            post(enterprise::handlers::oidc_exchange),
+        )
+        .route(
+            paths::AUTH_LDAP_LOGIN,
+            post(enterprise::handlers::ldap_login),
+        )
         .layer(DefaultBodyLimit::max(AUTH_BODY_LIMIT));
 
     // Everything below requires principal A: bearer token + (protocol 1.5)
@@ -199,7 +217,22 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     }
     let listen_addr = config.listen_addr;
     let state = AppState::new(config, pool).await?;
+    if let Some(ent) = &state.enterprise {
+        let detail = format!(
+            "startup check ok ({} {})",
+            ent.kind().as_str(),
+            ent.issuer()
+        );
+        if let Err(e) = enterprise::record_status(&state.db, ent.kind(), true, &detail).await {
+            tracing::warn!(
+                failure = error::database_error_kind(&e),
+                "cannot record the auth status"
+            );
+        }
+        tracing::info!(provider = ent.kind().as_str(), "enterprise sign-in enabled");
+    }
     jobs::spawn(state.clone());
+    enterprise::recheck::spawn(state.clone());
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(listen_addr).await?;
     tracing::info!(addr = %listener.local_addr()?, version = env!("CARGO_PKG_VERSION"), "consolecrypt-server listening");

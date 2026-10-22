@@ -73,8 +73,13 @@ async fn audit_count(srv: &TestServer, event_type: &str) -> i64 {
 async fn off_by_default_keeps_the_old_behaviour() {
     let srv = server!();
     let (_, meta) = srv.get(paths::META, "").await;
-    assert_eq!(meta["protocol_version"], "1.7");
+    assert_eq!(meta["protocol_version"], "1.8");
     assert_eq!(meta["capabilities"]["device_protection"], false);
+    // Protocol 1.8: standard sign-in is advertised explicitly.
+    assert_eq!(
+        meta["capabilities"]["auth"],
+        serde_json::json!({"mode": "standard"})
+    );
 
     let a = srv.new_account().await;
     let vault = srv.create_vault(&a).await;

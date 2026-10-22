@@ -46,6 +46,12 @@ pub enum AuditType {
     VaultProofFailed,
     SyncPush,
     AdminAction,
+    /// An account was linked to an IdP/directory identity (protocol 1.8).
+    IdentityLinked,
+    IdentityUnlinked,
+    /// The periodic re-check found the user disabled, deleted or outside
+    /// the required group; all sessions were revoked (protocol 1.8).
+    EnterpriseAccessRevoked,
     ShareCreated,
     ShareAccessRotated,
     ShareRevision,
@@ -92,6 +98,9 @@ impl AuditType {
             AuditType::VaultProofFailed => "vault_proof_failed",
             AuditType::SyncPush => "sync_push",
             AuditType::AdminAction => "admin_action",
+            AuditType::IdentityLinked => "identity_linked",
+            AuditType::IdentityUnlinked => "identity_unlinked",
+            AuditType::EnterpriseAccessRevoked => "enterprise_access_revoked",
             AuditType::ShareCreated => "share_created",
             AuditType::ShareAccessRotated => "share_access_rotated",
             AuditType::ShareRevision => "share_revision",

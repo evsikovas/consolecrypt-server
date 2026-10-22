@@ -350,6 +350,89 @@ config:
       # -- Decided/expired device trust requests.
       deviceRequestDays: 90
 
+# Sign-in mode (server 0.2.0, protocol 1.8). `standard` (default): email +
+# account password, as before. `enterprise`: accounts sign in only through
+# the organisation's IdP (OIDC) or Active Directory / LDAP; registration and
+# account passwords are switched off. Vault encryption is unchanged: the IdP,
+# the directory and the server never get anything that opens a vault.
+# Secrets come from an existing Kubernetes Secret, mounted read-only at
+# /run/secrets/consolecrypt-auth. See docs/public/ENTERPRISE.md.
+auth:
+  # -- standard | enterprise (CC_AUTH_MODE).
+  mode: standard
+  # -- oidc | ldap (CC_AUTH_PROVIDER), enterprise only.
+  provider: ""
+  # -- Name on the app's sign-in button, e.g. "Acme SSO" (CC_AUTH_DISPLAY_NAME).
+  displayName: ""
+  # -- Allowed email domains (CC_AUTH_ALLOWED_DOMAINS). Existing password
+  # accounts are linked on their first enterprise sign-in only for these
+  # domains. Required for the google preset.
+  allowedDomains: []
+  # -- Create an account on the first sign-in (CC_AUTH_AUTO_CREATE).
+  autoCreate: true
+  # -- Re-check users at the IdP/directory at most this often (1–1440).
+  recheckMinutes: 15
+  # -- Sessions survive an IdP/directory outage this long (0–720).
+  recheckGraceHours: 24
+  oidc:
+    # -- generic | entra | adfs | keycloak | google | okta (CC_OIDC_PRESET).
+    preset: generic
+    # -- Exact issuer, e.g. https://login.microsoftonline.com/<tenant-id>/v2.0.
+    # The IdP redirect URI is config.publicUrl + /v1/auth/oidc/callback.
+    issuer: ""
+    clientId: ""
+    # -- Space-separated scopes; empty = preset default.
+    scopes: ""
+    # -- Claim used as the email; empty = preset default (entra:
+    # preferred_username, adfs: upn, others: email).
+    emailClaim: ""
+    # -- Only identities with this claim value, e.g. "groups=<object-id>" or
+    # "roles=ConsoleCrypt.User" (CC_OIDC_REQUIRED_CLAIM).
+    requiredClaim: ""
+    # -- Require MFA in amr (or one of mfaAcrValues in acr).
+    requireMfa: false
+    mfaAcrValues: ""
+    # -- client_secret_basic (default) | client_secret_post.
+    tokenAuthMethod: ""
+    # -- Existing Secret with the client secret and the 32-byte key that seals
+    # IdP refresh tokens at rest (e.g. `openssl rand -hex 32`).
+    existingSecret: ""
+    clientSecretKey: client-secret
+    tokenKeyKey: token-key
+    # -- Key of an extra CA certificate (PEM) in existingSecret for an IdP
+    # behind an internal CA (e.g. AD FS); empty = system roots only.
+    caKey: ""
+  ldap:
+    # -- ldaps://dc1.acme.local:636, or ldap://…:389 with starttls: true.
+    # Plain ldap:// without STARTTLS is refused.
+    url: ""
+    starttls: false
+    # -- Service account used for searches and re-checks.
+    bindDn: ""
+    baseDn: ""
+    # -- Empty = AD default: mail, userPrincipalName or sAMAccountName = {login}.
+    userFilter: ""
+    # -- Empty = mail.
+    emailAttr: ""
+    # -- Empty = objectGUID (stable id).
+    idAttr: ""
+    # -- Group DN; nested membership counts (LDAP_MATCHING_RULE_IN_CHAIN).
+    requiredGroup: ""
+    timeoutSecs: ""
+    # -- Failed sign-ins per login and per directory user within
+    # failureWindowMinutes before further attempts are refused without
+    # contacting the directory (429). Keep BELOW the domain lockout threshold.
+    maxFailures: 3
+    failureWindowMinutes: 15
+    # -- Failed sign-ins per client IP within the window (0 = off).
+    maxFailuresPerIp: 30
+    # -- Existing Secret with the service account password and, optionally,
+    # the directory's CA certificate.
+    existingSecret: ""
+    bindPasswordKey: bind-password
+    # -- e.g. ca.pem; empty = system roots only.
+    caKey: ""
+
 mail:
   # -- disabled | smtp | file.
   #  * disabled (default): nothing is sent. Operators issue password-reset

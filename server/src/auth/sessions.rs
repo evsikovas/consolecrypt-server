@@ -84,6 +84,7 @@ struct RefreshRow {
     used_at: Option<DateTime<Utc>>,
     session_expires_at: DateTime<Utc>,
     session_revoked: bool,
+    revoke_reason: Option<String>,
     device_id: Uuid,
     device_revoked: bool,
     signing_public_key: Vec<u8>,
@@ -104,6 +105,9 @@ impl std::fmt::Debug for RefreshProof<'_> {
     }
 }
 
+/// Revocation reason of sessions ended by an enterprise re-check.
+const REVOKE_ACCOUNT_DISABLED: &str = crate::enterprise::recheck::REVOKE_REASON;
+
 fn refresh_failure(reason: &'static str) -> AppError {
     metrics::counter!("cc_auth_failures_total", "reason" => reason).increment(1);
     AppError::unauthorized()
@@ -111,12 +115,43 @@ fn refresh_failure(reason: &'static str) -> AppError {
 
 /// Rotate a refresh token. Single use: a token presented a second time
 /// revokes its whole session (it leaked) and emits `session_revoked`.
+///
+/// Enterprise mode (protocol 1.8): when the account's re-check at the
+/// IdP/directory is due, the transaction is rolled back, the re-check runs
+/// without holding session locks, and the rotation is retried once.
 pub async fn refresh(
     state: &AppState,
     presented: &SecretString,
     ip: Option<IpAddr>,
     proof: RefreshProof<'_>,
 ) -> AppResult<TokenPair> {
+    match refresh_once(state, presented, ip, &proof, false).await? {
+        RefreshStep::Done(tokens) => Ok(tokens),
+        RefreshStep::Recheck(user_id) => {
+            let outcome = crate::enterprise::recheck::run(state, user_id).await?;
+            if let Some(err) = crate::enterprise::recheck::outcome_error(outcome) {
+                return Err(err);
+            }
+            match refresh_once(state, presented, ip, &proof, true).await? {
+                RefreshStep::Done(tokens) => Ok(tokens),
+                RefreshStep::Recheck(_) => unreachable!("re-check skipped on the second pass"),
+            }
+        }
+    }
+}
+
+enum RefreshStep {
+    Done(TokenPair),
+    Recheck(UserId),
+}
+
+async fn refresh_once(
+    state: &AppState,
+    presented: &SecretString,
+    ip: Option<IpAddr>,
+    proof: &RefreshProof<'_>,
+    rechecked: bool,
+) -> AppResult<RefreshStep> {
     let hash = crypto::presented_token_hash(TokenKind::Refresh, presented.expose_secret())
         .ok_or_else(|| refresh_failure("malformed_refresh_token"))?;
 
@@ -126,7 +161,7 @@ pub async fn refresh(
     let row: Option<RefreshRow> = sqlx::query_as(
         "SELECT rt.session_id, s.user_id, rt.expires_at AS token_expires_at, rt.used_at,
                 s.expires_at AS session_expires_at, s.revoked_at IS NOT NULL AS session_revoked,
-                s.device_id, d.revoked_at IS NOT NULL AS device_revoked, d.signing_public_key,
+                s.revoke_reason, s.device_id, d.revoked_at IS NOT NULL AS device_revoked, d.signing_public_key,
                 u.status = 'active' AS user_active
            FROM refresh_tokens rt
            JOIN sessions s ON s.id = rt.session_id
@@ -205,12 +240,24 @@ pub async fn refresh(
         ));
     }
     let now = Utc::now();
+    if row.session_revoked && row.revoke_reason.as_deref() == Some(REVOKE_ACCOUNT_DISABLED) {
+        return Err(crate::enterprise::recheck::account_disabled());
+    }
     if row.session_revoked
         || !row.user_active
         || row.token_expires_at <= now
         || row.session_expires_at <= now
     {
         return Err(refresh_failure("session_invalid"));
+    }
+    if state.config.auth.is_enterprise()
+        && !rechecked
+        && crate::enterprise::recheck::due(&mut tx, state, user_id).await?
+            == crate::enterprise::recheck::Due::Yes
+    {
+        // Nothing written yet: the proof nonce is consumed on the retry.
+        drop(tx);
+        return Ok(RefreshStep::Recheck(user_id));
     }
 
     sqlx::query("UPDATE refresh_tokens SET used_at = now() WHERE token_hash = $1")
@@ -236,13 +283,13 @@ pub async fn refresh(
     insert_refresh_token(&mut tx, session_id, &refresh, refresh_expires_at).await?;
     tx.commit().await?;
 
-    Ok(TokenPair {
+    Ok(RefreshStep::Done(TokenPair {
         session_id,
         access_token: access.token,
         access_expires_at,
         refresh_token: refresh.token,
         refresh_expires_at,
-    })
+    }))
 }
 
 /// Revoke one session. Returns whether it was live.

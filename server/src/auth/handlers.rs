@@ -34,6 +34,9 @@ pub async fn register(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<RegisterRequest>,
 ) -> AppResult<(StatusCode, Json<AuthResponse>)> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     state.limits.check_auth_ip(ip)?;
     if !state.config.registration_open {
         return Err(AppError::forbidden("registration is closed on this server"));
@@ -124,7 +127,9 @@ pub async fn register(
 #[derive(sqlx::FromRow)]
 struct LoginUserRow {
     id: Uuid,
-    password_hash: String,
+    /// NULL for accounts linked to an enterprise identity (protocol 1.8):
+    /// they never match a password, like an unknown user.
+    password_hash: Option<String>,
     status: String,
     email_verified: bool,
 }
@@ -135,6 +140,9 @@ pub async fn login(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<LoginRequest>,
 ) -> AppResult<Json<AuthResponse>> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     state.limits.check_auth_ip(ip)?;
     // Normalise first: the limiter key is then bounded (≤ 254 bytes) and a
     // malformed address (e.g. with NUL, which PostgreSQL rejects) can never
@@ -164,7 +172,7 @@ pub async fn login(
         .passwords
         .verify(
             &req.password,
-            user.as_ref().map(|u| u.password_hash.as_str()),
+            user.as_ref().and_then(|u| u.password_hash.as_deref()),
         )
         .await?;
     let user = match user {
@@ -397,6 +405,9 @@ pub async fn forgot_password(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<ForgotPasswordRequest>,
 ) -> AppResult<StatusCode> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     start_password_reset(state, ip, req, false)
 }
 
@@ -407,6 +418,9 @@ pub async fn recovery_start(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<ForgotPasswordRequest>,
 ) -> AppResult<StatusCode> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     start_password_reset(state, ip, req, true)
 }
 
@@ -488,6 +502,9 @@ pub async fn reset_password(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<ResetPasswordRequest>,
 ) -> AppResult<StatusCode> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     complete_password_reset(&state, ip, req, false).await
 }
 
@@ -497,6 +514,9 @@ pub async fn recovery_confirm(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<ResetPasswordRequest>,
 ) -> AppResult<StatusCode> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     complete_password_reset(&state, ip, req, true).await
 }
 
@@ -625,19 +645,22 @@ pub async fn change_password(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<ChangePasswordRequest>,
 ) -> AppResult<StatusCode> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     state
         .limits
         .proof_device
         .check(&Uuid::from(auth.device_id))?;
     validate_account_password(&req.new_password)?;
-    let (current_hash, email): (String, String) =
+    let (current_hash, email): (Option<String>, String) =
         sqlx::query_as("SELECT password_hash, email FROM users WHERE id = $1")
             .bind(Uuid::from(auth.user_id))
             .fetch_one(&state.db)
             .await?;
     if !state
         .passwords
-        .verify(&req.current_password, Some(&current_hash))
+        .verify(&req.current_password, current_hash.as_deref())
         .await?
     {
         metrics::counter!("cc_auth_failures_total", "reason" => "change_password").increment(1);
@@ -721,6 +744,9 @@ pub async fn verify_email(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<VerifyEmailRequest>,
 ) -> AppResult<StatusCode> {
+    if state.config.auth.is_enterprise() {
+        return Err(crate::enterprise::enterprise_auth_required());
+    }
     state.limits.check_auth_ip(ip)?;
     let mut tx = state.db.begin().await?;
     let user_id =

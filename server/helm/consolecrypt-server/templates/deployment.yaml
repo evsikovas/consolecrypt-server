@@ -122,22 +122,34 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- if or (eq .Values.mail.transport "file") .Values.extraVolumeMounts }}
+          {{- $authSecret := include "consolecrypt-server.authSecret" . | trim }}
+          {{- if or (eq .Values.mail.transport "file") .Values.extraVolumeMounts $authSecret }}
           volumeMounts:
             {{- if eq .Values.mail.transport "file" }}
             - name: mail
               mountPath: {{ .Values.mail.file.dir }}
             {{- end }}
+            {{- if $authSecret }}
+            - name: auth-secrets
+              mountPath: /run/secrets/consolecrypt-auth
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or (eq .Values.mail.transport "file") .Values.extraVolumes }}
+      {{- if or (eq .Values.mail.transport "file") .Values.extraVolumes $authSecret }}
       volumes:
         {{- if eq .Values.mail.transport "file" }}
         - name: mail
           emptyDir:
             sizeLimit: 64Mi
+        {{- end }}
+        {{- if $authSecret }}
+        - name: auth-secrets
+          secret:
+            secretName: {{ $authSecret }}
+            defaultMode: 0440
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

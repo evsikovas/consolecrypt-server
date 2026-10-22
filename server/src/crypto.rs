@@ -53,6 +53,8 @@ pub enum TokenKind {
     Account,
     /// Single-use "This wasn't me" links of security mails (protocol 1.7).
     DenyDevice,
+    /// Single-use OIDC login codes handed to the app (protocol 1.8, 60 s).
+    LoginCode,
 }
 
 impl TokenKind {
@@ -62,6 +64,7 @@ impl TokenKind {
             TokenKind::Refresh => "ccr_",
             TokenKind::Account => "cct_",
             TokenKind::DenyDevice => "ccd_",
+            TokenKind::LoginCode => "ccl_",
         }
     }
 }

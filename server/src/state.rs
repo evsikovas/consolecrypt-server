@@ -26,6 +26,9 @@ pub struct Inner {
     pub mailer: Arc<dyn Mailer>,
     pub limits: RateLimiters,
     pub passwords: PasswordHasher,
+    /// Enterprise sign-in provider (`None` in standard mode), validated at
+    /// startup (protocol 1.8).
+    pub enterprise: Option<Arc<crate::enterprise::Enterprise>>,
     /// Last time `devices.last_seen_at` was written per device (throttling).
     device_seen: Mutex<HashMap<DeviceId, Instant>>,
 }
@@ -53,12 +56,14 @@ impl AppState {
         db: PgPool,
         mailer: Arc<dyn Mailer>,
     ) -> anyhow::Result<Self> {
+        let enterprise = crate::enterprise::Enterprise::init(&config).await?;
         let events = Events::start(config.event_bus, &db).await?;
         let state = AppState(Arc::new(Inner {
             limits: RateLimiters::new(&config.rate_limits),
             passwords: PasswordHasher::new(&config.password_hashing)?,
             events,
             mailer,
+            enterprise,
             db,
             config,
             device_seen: Mutex::new(HashMap::new()),
