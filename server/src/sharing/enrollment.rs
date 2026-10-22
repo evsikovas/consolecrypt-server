@@ -210,8 +210,15 @@ async fn lock_context(
     require_enabled(state)?;
     let keys = lock_identities(conn, auth, participants).await?;
     let row = store::lock_item(conn, id.into(), write).await?;
+    let item = service::state(&row)?;
+    // A recipient who left the share has no enrollment authority either.
+    if item.access.manifest.owner_user_id != auth.user_id
+        && store::departed(conn, id.into(), auth.user_id.into()).await?
+    {
+        return Err(AppError::not_found());
+    }
     recheck_session(conn, auth).await?;
-    Ok((service::state(&row)?, keys))
+    Ok((item, keys))
 }
 async fn audit(
     conn: &mut PgConnection,

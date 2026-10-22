@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- Protocol 1.8 (2026-10-22, server 0.1.17, additive): owner-only delete of
+  shared items with a restore window, and recipients leaving a share
+  (internal security audit, low). Advertised in `/v1/meta` as
+  `capabilities.share_leave` and `capabilities.share_restore` whenever object
+  sharing is enabled; clients hide the actions otherwise.
+  - Only the owner account may append a `Delete` tombstone. An editor gets
+    `403 owner_only` (new `ErrorCode::OwnerOnly`); older clients cannot decode
+    the code and fall back to the HTTP status (`forbidden`). Edits by editors
+    are unchanged.
+  - On an owner delete the server keeps the last content revision
+    (ciphertext and per-device envelopes, never plaintext) for
+    `sharing::RESTORE_WINDOW_DAYS` = 30. `GET /v1/shares/deleted?after=&limit=`
+    (owner devices that are members) → `DeletedShareListPage` of
+    `DeletedSharedItem { state, last_revision, deleted_at, restorable_until,
+    departed_user_ids }`. A tombstone is never resurrected (clients refuse
+    revisions after it): the owner verifies `last_revision` against the
+    tombstone's `previous_revision_hash`, opens it and republishes it as a new
+    item with `CreateShareRequest.restored_from` (optional, omitted when
+    `None`). The server checks ownership, kind, the window and that no
+    departed account is included (`403`), then drops the retained content;
+    a second restore answers `410 gone`. Maintenance drops retained content
+    after the window; the signed tombstone stays.
+  - Quota: the 1000-item limit counts live and still restorable items; expired
+    tombstones no longer count (hard cap of 10 000 rows per owner).
+  - `POST /v1/shares/{id}/leave` → `204` for a recipient account (the owner
+    gets `403`, a non-member `404`): all devices of that account lose server
+    access at once. The owner's `ShareListPage` carries
+    `departures: [{ share_id, user_id }]` (omitted when empty, never shown to
+    other recipients). The departure persists until the owner's next signed
+    manifest drops the account, or adds a device of it that the previous
+    manifest did not contain (an explicit new invitation); a manifest that
+    merely keeps the old devices does not let them back in. A departed account
+    has no enrollment authority on that item.
+  - Migration `0009_share_owner_delete`: `shared_items.deleted_at`,
+    `shared_items.restore_revision`, `shared_item_departures`.
+
 - Protocol 1.7 (2026-10-21, server 0.1.16, additive): new-device protection
   (security audit S1), active only while the server advertises
   `capabilities.device_protection` in `/v1/meta` (new `ServerInfo.capabilities`

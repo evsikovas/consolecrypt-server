@@ -22,7 +22,9 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/shares/capabilities", get(capabilities))
         .route("/v1/shares/recipients", get(recipient))
         .route("/v1/shares", get(list).post(create))
+        .route(DELETED_PATH, get(deleted))
         .route("/v1/shares/{id}", get(read))
+        .route("/v1/shares/{id}/leave", post(leave))
         .route("/v1/shares/{id}/revisions", post(put))
         .route("/v1/shares/{id}/access", post(rotate))
         .route("/v1/shares/{id}/history", get(history))
@@ -59,6 +61,27 @@ async fn put(
     ApiJson(req): ApiJson<PutSharedRevisionRequest>,
 ) -> AppResult<Json<SharedItemState>> {
     Ok(Json(service::put(&s, &a, id, req).await?))
+}
+async fn leave(
+    State(s): State<AppState>,
+    a: AuthContext,
+    ApiPath(id): ApiPath<ShareId>,
+) -> AppResult<StatusCode> {
+    service::leave(&s, &a, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+#[derive(Deserialize)]
+struct DeletedQuery {
+    after: Option<ShareId>,
+    #[serde(default = "page_limit")]
+    limit: u32,
+}
+async fn deleted(
+    State(s): State<AppState>,
+    a: AuthContext,
+    ApiQuery(q): ApiQuery<DeletedQuery>,
+) -> AppResult<Json<DeletedShareListPage>> {
+    Ok(Json(service::deleted(&s, &a, q.after, q.limit).await?))
 }
 async fn rotate(
     State(s): State<AppState>,

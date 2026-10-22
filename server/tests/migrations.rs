@@ -411,12 +411,17 @@ async fn enrollment_upgrade_preserves_existing_rows_and_has_share_scoped_cascade
         .unwrap();
     MIGRATOR.run(&db.pool).await.unwrap();
     MIGRATOR.run(&db.pool).await.unwrap();
-    let after_shared: serde_json::Value =
+    let mut after_shared: serde_json::Value =
         sqlx::query_scalar("SELECT to_jsonb(t) FROM shared_items t WHERE id=$1")
             .bind(share)
             .fetch_one(&db.pool)
             .await
             .unwrap();
+    // 0009 (protocol 1.8) only adds empty restore columns to live items.
+    for column in ["deleted_at", "restore_revision"] {
+        let added = after_shared.as_object_mut().unwrap().remove(column);
+        assert_eq!(added, Some(serde_json::Value::Null), "{column}");
+    }
     assert!(
         before_shared == after_shared,
         "enrollment migration altered shared data"

@@ -4,7 +4,7 @@
 //! by an enabled server is required; protocol version alone grants nothing.
 //! Canonical encodings validate structure before signing or verifying.
 
-use crate::{Bytes, DeviceId, MutationId, ObjectId, ShareId, UserId};
+use crate::{Bytes, DeviceId, MutationId, ObjectId, ShareId, Timestamp, UserId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -15,6 +15,11 @@ pub const MAX_MEMBERS: usize = 64;
 pub const MAX_CIPHERTEXT_BYTES: usize = 1024 * 1024 + 16;
 pub const MAX_PAGE_SIZE: u32 = 100;
 pub const API_PATH: &str = "/v1/shares";
+/// Owner-only listing of deleted, still restorable items (protocol 1.8).
+pub const DELETED_PATH: &str = "/v1/shares/deleted";
+/// How long the server keeps the last content of an owner-deleted item
+/// (protocol 1.8). Afterwards only the signed tombstone remains.
+pub const RESTORE_WINDOW_DAYS: u32 = 30;
 
 pub mod labels {
     pub const MANIFEST: &[u8] = b"consolecrypt/sharing/v1/access-manifest\0";
@@ -178,6 +183,12 @@ pub struct SharedRevision {
 pub struct CreateShareRequest {
     pub access: SignedAccessManifest,
     pub revision: SharedRevision,
+    /// Protocol 1.8: the owner republishes the content of an item they
+    /// deleted (a tombstone is never resurrected). The server checks the
+    /// restore window, ownership and departures, then drops the retained
+    /// content of that item. Only when `capabilities.share_restore`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_from: Option<ShareId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +234,43 @@ pub struct SharingCapabilities {
 pub struct ShareListPage {
     /// Latest states visible to the requesting device, ordered by share ID.
     pub items: Vec<SharedItemState>,
+    pub next_after: Option<ShareId>,
+    pub has_more: bool,
+    /// Protocol 1.8, owner view only: recipients of items on this page who
+    /// left the share. Their devices no longer read or write the item; they
+    /// stay in the signed manifest until the owner's next access change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub departures: Vec<ShareDeparture>,
+}
+
+/// A recipient account that left a shared item (protocol 1.8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareDeparture {
+    pub share_id: ShareId,
+    pub user_id: UserId,
+}
+
+/// An owner-deleted item within its restore window (protocol 1.8). The
+/// owner verifies `last_revision` against the signed tombstone (its
+/// `previous_revision_hash`) and republishes the opened content with
+/// `CreateShareRequest.restored_from`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletedSharedItem {
+    /// Current signed tombstone state.
+    pub state: SharedItemState,
+    /// The last content revision before the tombstone, with its body.
+    pub last_revision: SharedRevision,
+    pub deleted_at: Timestamp,
+    pub restorable_until: Timestamp,
+    /// Recipients who left; a restore must not include them again.
+    #[serde(default)]
+    pub departed_user_ids: Vec<UserId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletedShareListPage {
+    /// Ordered by share ID.
+    pub items: Vec<DeletedSharedItem>,
     pub next_after: Option<ShareId>,
     pub has_more: bool,
 }
