@@ -49,8 +49,10 @@ pub async fn list_devices(
 }
 
 /// `POST /v1/devices` → `201 DeviceTrustRequest`. The calling device asks to
-/// be trusted. An empty `vault_ids` is expanded to every vault the account can
-/// access; the stored/returned list is always explicit.
+/// be trusted. An empty `vault_ids` is expanded to every personal vault the
+/// account can access; the stored/returned list is always explicit. Team
+/// vaults are never approved per device: a member's devices reach them
+/// through the member's user envelope (protocol 1.9).
 pub async fn create_trust_request(
     State(state): State<AppState>,
     auth: AuthContext,
@@ -60,7 +62,7 @@ pub async fn create_trust_request(
     let accessible: Vec<Uuid> = sqlx::query_scalar(
         "SELECT v.id FROM vaults v
            JOIN vault_members m ON m.vault_id = v.id AND m.user_id = $1 AND m.revoked_at IS NULL
-          WHERE v.state = 'active'
+          WHERE v.state = 'active' AND v.kind = 'personal'
           ORDER BY v.id",
     )
     .bind(Uuid::from(auth.user_id))

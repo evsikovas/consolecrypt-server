@@ -32,6 +32,7 @@ pub mod recovery;
 pub mod sharing;
 pub mod state;
 pub mod sync;
+pub mod teams;
 pub mod telemetry;
 pub mod util;
 pub mod vaults;
@@ -98,6 +99,7 @@ pub fn build_router(state: AppState) -> Router {
     // per-request device proof, established by `auth::middleware`.
     let authed = Router::new()
         .merge(sharing::handlers::routes())
+        .merge(teams::routes())
         // auth (authenticated)
         .route(paths::AUTH_LOGOUT, post(a::logout))
         .route(paths::AUTH_ME, get(a::me))

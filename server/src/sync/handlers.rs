@@ -103,9 +103,13 @@ pub async fn push(
     }
     validate_push(&req)?;
     let vault_id = req.vault_id;
-    VaultAccess::load(&state.db, &auth, vault_id)
-        .await?
-        .require_trusted()?;
+    let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
+    access.require_trusted()?;
+    // Team viewers read only (protocol 1.9); personal vaults have no viewers.
+    if access.role == cc_protocol::vaults::VaultRole::Viewer {
+        return Err(AppError::forbidden("viewers cannot change team resources")
+            .with_details(serde_json::json!({"reason": "team_role"})));
+    }
 
     let db_timer = crate::db::DbTimer::start("sync_push");
     let mut tx = state.db.begin().await?;

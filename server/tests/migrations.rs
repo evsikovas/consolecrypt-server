@@ -185,23 +185,56 @@ async fn seed_personal_vault(pool: &sqlx::PgPool) -> (Uuid, Uuid, Uuid) {
 /// Compare whole rows, including timestamps and opaque payloads. Callers use
 /// assert!(a == b), so a failure never dumps envelopes/ciphertext to test logs.
 /// The device-protection bookkeeping columns (0008) are derived, not data,
-/// and are checked by their own upgrade test.
+/// and are checked by their own upgrade test. The team columns (0012) carry
+/// defaults for personal vaults and are checked by
+/// `teams_upgrade_marks_existing_vaults_personal`.
 async fn personal_snapshot(pool: &sqlx::PgPool) -> serde_json::Value {
     sqlx::query_scalar(
         "SELECT jsonb_build_object(
            'users', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM users t),
            'devices', (SELECT jsonb_agg(to_jsonb(t) - 'first_trusted_at' - 'quarantine_lifted_at'
                                         ORDER BY id) FROM devices t),
-           'vaults', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM vaults t),
-           'members', (SELECT jsonb_agg(to_jsonb(t) ORDER BY vault_id, user_id) FROM vault_members t),
+           'vaults', (SELECT jsonb_agg(to_jsonb(t) - 'kind' - 'key_epoch' - 'log_seq' - 'log_head'
+                                       - 'rotation_required' ORDER BY id) FROM vaults t),
+           'members', (SELECT jsonb_agg(to_jsonb(t) - 'identity_encryption_key'
+                                        - 'identity_signing_key'
+                                        ORDER BY vault_id, user_id) FROM vault_members t),
            'sequences', (SELECT jsonb_agg(to_jsonb(t) ORDER BY vault_id) FROM vault_sequences t),
-           'envelopes', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM vault_key_envelopes t),
+           'envelopes', (SELECT jsonb_agg(to_jsonb(t) - 'key_epoch' ORDER BY id)
+                         FROM vault_key_envelopes t),
            'objects', (SELECT jsonb_agg(to_jsonb(t) ORDER BY vault_id, object_id) FROM vault_objects t)
          )",
     )
     .fetch_one(pool)
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn teams_upgrade_marks_existing_vaults_personal() {
+    let Some((db, _)) = TestDb::create().await else {
+        return;
+    };
+    MIGRATOR.run_to(11, &db.pool).await.unwrap();
+    let (_, _, vault) = seed_personal_vault(&db.pool).await;
+    MIGRATOR.run(&db.pool).await.unwrap();
+    let (kind, epoch, seq, rotation): (String, i32, Option<i64>, bool) = sqlx::query_as(
+        "SELECT kind, key_epoch, log_seq, rotation_required FROM vaults WHERE id = $1",
+    )
+    .bind(vault)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (kind.as_str(), epoch, seq, rotation),
+        ("personal", 0, None, false)
+    );
+    let envelope_epochs: Vec<i32> =
+        sqlx::query_scalar("SELECT DISTINCT key_epoch FROM vault_key_envelopes")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert!(envelope_epochs.iter().all(|e| *e == 0));
 }
 
 #[tokio::test]

@@ -62,6 +62,14 @@ pub enum AuditType {
     ShareEnrollmentAccepted,
     ShareLeft,
     ShareRestored,
+    TeamCreated,
+    TeamInvited,
+    TeamMemberAdded,
+    TeamMemberRemoved,
+    TeamRoleChanged,
+    TeamOwnerTransferred,
+    TeamLeft,
+    TeamKeyRotated,
 }
 
 impl AuditType {
@@ -113,6 +121,14 @@ impl AuditType {
             AuditType::ShareEnrollmentAccepted => "share_enrollment_accepted",
             AuditType::ShareLeft => "share_left",
             AuditType::ShareRestored => "share_restored",
+            AuditType::TeamCreated => "team_created",
+            AuditType::TeamInvited => "team_invited",
+            AuditType::TeamMemberAdded => "team_member_added",
+            AuditType::TeamMemberRemoved => "team_member_removed",
+            AuditType::TeamRoleChanged => "team_role_changed",
+            AuditType::TeamOwnerTransferred => "team_owner_transferred",
+            AuditType::TeamLeft => "team_left",
+            AuditType::TeamKeyRotated => "team_key_rotated",
         }
     }
 }

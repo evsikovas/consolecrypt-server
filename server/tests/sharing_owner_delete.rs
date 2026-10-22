@@ -65,7 +65,7 @@ async fn editor_cannot_delete_the_owners_item() {
         .await
         .unwrap();
     let (_, meta) = srv.get("/v1/meta", &owner.access).await;
-    assert_eq!(meta["protocol_version"], "1.9");
+    assert_eq!(meta["protocol_version"], "1.10");
     assert_eq!(meta["capabilities"]["share_leave"], true);
     assert_eq!(meta["capabilities"]["share_restore"], true);
     let off = server!();

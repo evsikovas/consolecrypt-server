@@ -61,7 +61,8 @@ pub async fn create_vault(
         .execute(&mut *tx)
         .await?;
     let owned: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM vaults WHERE owner_user_id = $1 AND state <> 'deleted'",
+        "SELECT count(*) FROM vaults
+          WHERE owner_user_id = $1 AND state <> 'deleted' AND kind = 'personal'",
     )
     .bind(Uuid::from(auth.user_id))
     .fetch_one(&mut *tx)
@@ -165,6 +166,7 @@ pub async fn list_vaults(
            JOIN vaults v ON v.id = m.vault_id
            JOIN vault_sequences s ON s.vault_id = v.id
           WHERE m.user_id = $1 AND m.revoked_at IS NULL AND v.state <> 'deleted'
+            AND v.kind = 'personal'
           ORDER BY v.created_at, v.id",
     )
     .bind(Uuid::from(auth.user_id))

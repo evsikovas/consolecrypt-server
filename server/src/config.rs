@@ -82,6 +82,12 @@ pub struct Config {
     pub max_vault_bytes: i64,
     /// Quota: vaults an account may own (create beyond → 403).
     pub max_vaults_per_account: i64,
+    /// Teams (protocol 1.9): `/v1/teams/*` (`CC_TEAMS_ENABLED`, default on).
+    pub teams_enabled: bool,
+    /// Quota: teams an account may belong to (`CC_MAX_TEAMS_PER_ACCOUNT`).
+    pub max_teams_per_account: i64,
+    /// Quota: members of one team (`CC_MAX_TEAM_MEMBERS`).
+    pub max_team_members: i64,
     pub ws_ping_interval: Duration,
     /// How often a WebSocket re-checks that its session is still valid.
     pub ws_session_recheck_interval: Duration,
@@ -442,6 +448,13 @@ impl Config {
                 "CC_MAX_VAULTS_PER_ACCOUNT",
                 50,
             )?,
+            teams_enabled: parse_or(get("CC_TEAMS_ENABLED"), "CC_TEAMS_ENABLED", true)?,
+            max_teams_per_account: parse_or(
+                get("CC_MAX_TEAMS_PER_ACCOUNT"),
+                "CC_MAX_TEAMS_PER_ACCOUNT",
+                50,
+            )?,
+            max_team_members: parse_or(get("CC_MAX_TEAM_MEMBERS"), "CC_MAX_TEAM_MEMBERS", 200)?,
             ws_ping_interval: secs("CC_WS_PING_INTERVAL_SECS", 30)?,
             ws_session_recheck_interval: secs("CC_WS_SESSION_RECHECK_SECS", 30)?,
             ws_max_connections_per_user: parse_or(
@@ -534,6 +547,8 @@ impl Config {
         }
         if self.ws_max_connections_per_user == 0
             || self.max_vaults_per_account < 1
+            || self.max_teams_per_account < 1
+            || self.max_team_members < 2
             || self.max_vault_bytes < 1024 * 1024
             || self.database_max_connections == 0
             || self.password_hashing.max_concurrent == 0
