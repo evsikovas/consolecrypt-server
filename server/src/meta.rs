@@ -26,6 +26,7 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
         source_code_url: Some(state.config.source_code_url.clone()),
         capabilities: ServerCapabilities {
             device_protection: state.config.device_protection.enabled,
+            ..Default::default()
         },
     }
 }

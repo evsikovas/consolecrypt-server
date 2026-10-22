@@ -57,6 +57,29 @@ pub enum ErrorCode {
     Internal,
     /// 503
     Unavailable,
+    /// 403 — the server is in enterprise mode (protocol 1.8): account
+    /// passwords are not accepted (register, password login, reset, change,
+    /// email verification). Sign in with `capabilities.auth`. The message
+    /// tells older clients to update the app.
+    EnterpriseAuthRequired,
+    /// 409 — the identity from the IdP/directory matches an account that is
+    /// linked to a different identity, or an account that may not be taken
+    /// over automatically (protocol 1.8).
+    IdentityConflict,
+    /// 403 — the email domain of the identity is not allowed on this server
+    /// (protocol 1.8).
+    DomainNotAllowed,
+    /// 403 — the identity lacks the required group/role/claim (protocol 1.8).
+    GroupRequired,
+    /// 403 — the IdP did not report multi-factor authentication although the
+    /// server requires it (protocol 1.8).
+    MfaRequired,
+    /// 503 — the IdP or directory is unreachable or misconfigured
+    /// (protocol 1.8). Retryable.
+    IdpUnavailable,
+    /// 403 — the account was disabled by the administrator or in the
+    /// IdP/directory; every session was revoked (protocol 1.8).
+    AccountDisabled,
 }
 
 impl ErrorCode {
@@ -70,16 +93,21 @@ impl ErrorCode {
             | ErrorCode::DeviceRevoked
             | ErrorCode::DeviceNotTrusted
             | ErrorCode::EmailNotVerified
-            | ErrorCode::DeviceInQuarantine => 403,
+            | ErrorCode::DeviceInQuarantine
+            | ErrorCode::EnterpriseAuthRequired
+            | ErrorCode::DomainNotAllowed
+            | ErrorCode::GroupRequired
+            | ErrorCode::MfaRequired
+            | ErrorCode::AccountDisabled => 403,
             ErrorCode::NotFound => 404,
-            ErrorCode::Conflict | ErrorCode::AlreadyExists => 409,
+            ErrorCode::Conflict | ErrorCode::AlreadyExists | ErrorCode::IdentityConflict => 409,
             ErrorCode::Gone => 410,
             ErrorCode::PayloadTooLarge => 413,
             ErrorCode::InvalidProof => 422,
             ErrorCode::UpgradeRequired => 426,
             ErrorCode::RateLimited | ErrorCode::EnvelopeRateLimited => 429,
             ErrorCode::Internal => 500,
-            ErrorCode::Unavailable => 503,
+            ErrorCode::Unavailable | ErrorCode::IdpUnavailable => 503,
         }
     }
 
@@ -91,6 +119,7 @@ impl ErrorCode {
                 | ErrorCode::EnvelopeRateLimited
                 | ErrorCode::Internal
                 | ErrorCode::Unavailable
+                | ErrorCode::IdpUnavailable
         )
     }
 }
@@ -147,5 +176,29 @@ mod tests {
         assert_eq!(v, "envelope_rate_limited");
         assert_eq!(ErrorCode::EnvelopeRateLimited.http_status(), 429);
         assert!(ErrorCode::EnvelopeRateLimited.is_retryable());
+    }
+
+    #[test]
+    fn enterprise_codes_1_8() {
+        for (code, name, status) in [
+            (
+                ErrorCode::EnterpriseAuthRequired,
+                "enterprise_auth_required",
+                403,
+            ),
+            (ErrorCode::IdentityConflict, "identity_conflict", 409),
+            (ErrorCode::DomainNotAllowed, "domain_not_allowed", 403),
+            (ErrorCode::GroupRequired, "group_required", 403),
+            (ErrorCode::MfaRequired, "mfa_required", 403),
+            (ErrorCode::IdpUnavailable, "idp_unavailable", 503),
+            (ErrorCode::AccountDisabled, "account_disabled", 403),
+        ] {
+            assert_eq!(serde_json::to_value(code).unwrap(), name);
+            assert_eq!(code.http_status(), status);
+            let back: ErrorCode = serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert_eq!(back, code);
+        }
+        assert!(ErrorCode::IdpUnavailable.is_retryable());
+        assert!(!ErrorCode::AccountDisabled.is_retryable());
     }
 }

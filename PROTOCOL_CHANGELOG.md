@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- Protocol 1.8 (2026-10-22, server 0.2.0, additive): enterprise sign-in mode
+  (`cc_protocol::enterprise_auth`). Servers in the default `standard` mode
+  behave as before; older clients keep working against them unchanged.
+  - `ServerInfo.capabilities.auth` (`AuthCapability { mode, provider,
+    display_name }`): `mode` = `standard` | `enterprise`, `provider` =
+    `oidc` | `ldap` (enterprise only), optional `display_name` for the
+    sign-in button. Absent on older servers = `standard`. Unknown future
+    values decode as `unknown` (ask the user to update the app).
+    `registration_open` is meaningless in enterprise mode.
+  - OIDC (system browser, PKCE S256 on both legs):
+    `GET /v1/auth/oidc/start?redirect_uri&code_challenge[&code_challenge_method=S256]&state&device_id[&login_hint]`
+    (`OidcStartQuery`, `OidcStartQuery::to_url`) → redirect to the IdP →
+    `GET /v1/auth/oidc/callback` (server-side) → redirect to the app's
+    `redirect_uri` with `login_code` + `state` or `error` +
+    `error_description` + `state` (`OidcAppCallback`). Allowed app redirect
+    URIs only: `http://127.0.0.1:{port}/auth/callback`,
+    `http://[::1]:{port}/auth/callback`, `consolecrypt://auth/callback`
+    (`is_allowed_app_redirect_uri`). `POST /v1/auth/oidc/exchange`
+    `OidcExchangeRequest { login_code, code_verifier, device, device_proof? }`
+    → `AuthResponse`. The `login_code` is single use, valid
+    `OIDC_LOGIN_CODE_TTL_SECONDS` (60 s) and bound to the `code_challenge`
+    and `device_id`; a flow lives `OIDC_FLOW_TTL_SECONDS` (600 s).
+  - LDAP / Active Directory: `POST /v1/auth/ldap/login`
+    `LdapLoginRequest { login, password, device, device_proof? }` →
+    `AuthResponse`; unknown login and wrong password are indistinguishable
+    (`401 invalid_credentials`).
+  - Device rules are those of password login: `device_proof` is required for
+    an already registered device; a new device is untrusted and subject to
+    device protection (1.7).
+  - New error codes: `enterprise_auth_required` (403; register, password
+    login, password reset/change and email verification on an enterprise
+    server — the message asks older clients to update the app, which fall
+    back to `forbidden`), `identity_conflict` (409), `domain_not_allowed`
+    (403), `group_required` (403), `mfa_required` (403), `idp_unavailable`
+    (503, retryable), `account_disabled` (403; also from
+    `POST /v1/auth/refresh` when the periodic re-check finds the user
+    disabled, deleted or outside the required group — the session family is
+    revoked).
+  - New limits: `MAX_OIDC_STATE_LEN` (512), `MAX_ENTERPRISE_LOGIN_LEN` (256).
+
 - Protocol 1.7 (2026-10-21, server 0.1.16, additive): new-device protection
   (security audit S1), active only while the server advertises
   `capabilities.device_protection` in `/v1/meta` (new `ServerInfo.capabilities`

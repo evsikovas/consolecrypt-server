@@ -42,6 +42,56 @@ pub struct ServerCapabilities {
     /// `envelope_rate_limited`.
     #[serde(default)]
     pub device_protection: bool,
+    /// How accounts sign in (protocol 1.8). Older servers omit it, which
+    /// decodes as `standard` (email + account password).
+    #[serde(default)]
+    pub auth: AuthCapability,
+}
+
+/// `capabilities.auth` (protocol 1.8): the sign-in method of this server.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthCapability {
+    pub mode: AuthMode,
+    /// Set in enterprise mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<AuthProvider>,
+    /// Operator-chosen name for the sign-in button ("Sign in with
+    /// {display_name}"), e.g. "Acme SSO". Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+impl AuthCapability {
+    pub fn is_enterprise(&self) -> bool {
+        self.mode == AuthMode::Enterprise
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMode {
+    /// Email + account password, registration, email verification, reset.
+    #[default]
+    Standard,
+    /// Sign-in only through the organisation's IdP (OIDC) or directory
+    /// (LDAP); see [`crate::enterprise_auth`].
+    Enterprise,
+    /// A mode added after this build; the client cannot sign in and should
+    /// ask the user to update the app.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthProvider {
+    /// OpenID Connect via the system browser (`/v1/auth/oidc/*`).
+    Oidc,
+    /// Directory login and password (`/v1/auth/ldap/login`).
+    Ldap,
+    /// A provider added after this build (update the app).
+    #[serde(other)]
+    Unknown,
 }
 
 fn default_true() -> bool {
@@ -75,5 +125,34 @@ mod tests {
         });
         let info: ServerInfo = serde_json::from_value(v).unwrap();
         assert!(info.capabilities.device_protection);
+        assert_eq!(info.capabilities.auth.mode, AuthMode::Standard);
+        assert!(!info.capabilities.auth.is_enterprise());
+    }
+
+    #[test]
+    fn auth_capability_1_8() {
+        let v = serde_json::json!({
+            "server_version": "0.2.0",
+            "protocol_version": "1.8",
+            "minimum_supported_protocol": "1.0",
+            "capabilities": {
+                "device_protection": true,
+                "auth": { "mode": "enterprise", "provider": "oidc", "display_name": "Acme SSO" }
+            }
+        });
+        let info: ServerInfo = serde_json::from_value(v).unwrap();
+        let auth = &info.capabilities.auth;
+        assert!(auth.is_enterprise());
+        assert_eq!(auth.provider, Some(AuthProvider::Oidc));
+        assert_eq!(auth.display_name.as_deref(), Some("Acme SSO"));
+
+        let std = serde_json::to_value(AuthCapability::default()).unwrap();
+        assert_eq!(std, serde_json::json!({ "mode": "standard" }));
+
+        let future: AuthCapability =
+            serde_json::from_value(serde_json::json!({ "mode": "passkeys", "provider": "x" }))
+                .unwrap();
+        assert_eq!(future.mode, AuthMode::Unknown);
+        assert_eq!(future.provider, Some(AuthProvider::Unknown));
     }
 }

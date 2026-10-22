@@ -42,3 +42,13 @@ pub const MAX_DEVICE_NAME_LEN: usize = 128;
 pub const MAX_SIGNATURE_SKEW_SECONDS: i64 = 600;
 /// Allowed clock skew of per-request device proofs (protocol 1.5).
 pub const MAX_REQUEST_PROOF_SKEW_SECONDS: i64 = 120;
+
+/// Enterprise sign-in (protocol 1.8): how long a browser sign-in started at
+/// `/v1/auth/oidc/start` may take.
+pub const OIDC_FLOW_TTL_SECONDS: i64 = 600;
+/// Lifetime of the single-use `login_code` handed to the app.
+pub const OIDC_LOGIN_CODE_TTL_SECONDS: i64 = 60;
+/// Max length of the app `state` in `/v1/auth/oidc/start`.
+pub const MAX_OIDC_STATE_LEN: usize = 512;
+/// Max length of `login_hint` and of the LDAP `login`.
+pub const MAX_ENTERPRISE_LOGIN_LEN: usize = 256;
