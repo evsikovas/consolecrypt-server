@@ -129,6 +129,7 @@ def main():
             assert meta["capabilities"]["device_protection"] is False
             assert meta["capabilities"]["share_leave"] is False
             assert meta["capabilities"]["share_restore"] is False
+            assert meta["capabilities"]["recipient_lookup_post"] is False
             assert meta["source_code_url"] == config.SOURCE
             assert meta["email_verification_required"] is True
             request(origin, "/v1/auth/me", 401)

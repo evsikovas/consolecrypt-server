@@ -21,6 +21,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/shares/capabilities", get(capabilities))
         .route("/v1/shares/recipients", get(recipient))
+        .route(RECIPIENT_LOOKUP_PATH, post(recipient_lookup))
         .route("/v1/shares", get(list).post(create))
         .route(DELETED_PATH, get(deleted))
         .route("/v1/shares/{id}", get(read))
@@ -152,6 +153,15 @@ async fn history(
 struct RecipientQuery {
     email: String,
 }
+/// Same lookup as `recipient`, without the e-mail in the URL (protocol 1.8).
+async fn recipient_lookup(
+    State(s): State<AppState>,
+    a: AuthContext,
+    ApiJson(req): ApiJson<RecipientLookupRequest>,
+) -> AppResult<Json<SharingRecipient>> {
+    Ok(Json(service::recipient(&s, &a, &req.email).await?))
+}
+/// Deprecated in protocol 1.8: kept for older clients.
 async fn recipient(
     State(s): State<AppState>,
     a: AuthContext,

@@ -15,6 +15,11 @@ pub const MAX_MEMBERS: usize = 64;
 pub const MAX_CIPHERTEXT_BYTES: usize = 1024 * 1024 + 16;
 pub const MAX_PAGE_SIZE: u32 = 100;
 pub const API_PATH: &str = "/v1/shares";
+/// Exact-email directory lookup with the address in the JSON body, so it
+/// never appears in URLs or proxy access logs (protocol 1.8,
+/// `capabilities.recipient_lookup_post`). Supersedes
+/// `GET /v1/shares/recipients?email=`, which stays for older clients.
+pub const RECIPIENT_LOOKUP_PATH: &str = "/v1/shares/recipients/lookup";
 /// Owner-only listing of deleted, still restorable items (protocol 1.8).
 pub const DELETED_PATH: &str = "/v1/shares/deleted";
 /// How long the server keeps the last content of an owner-deleted item
@@ -284,6 +289,21 @@ pub struct ShareHistoryPage {
     pub latest_manifest_revision: u64,
     pub latest_revision: i64,
     pub has_more: bool,
+}
+
+/// Body of `POST /v1/shares/recipients/lookup` (protocol 1.8).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipientLookupRequest {
+    pub email: String,
+}
+
+impl std::fmt::Debug for RecipientLookupRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecipientLookupRequest")
+            .field("email", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Directory lookup is discovery, not cryptographic trust. The owner must

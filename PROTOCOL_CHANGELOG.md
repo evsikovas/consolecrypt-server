@@ -37,6 +37,16 @@
     has no enrollment authority on that item.
   - Migration `0009_share_owner_delete`: `shared_items.deleted_at`,
     `shared_items.restore_revision`, `shared_item_departures`.
+  - `POST /v1/shares/recipients/lookup` with body
+    `RecipientLookupRequest { email }` (unknown fields rejected) answers the
+    same `SharingRecipient` as before, with the same authentication, request
+    proof, verified-email requirement and per-device rate limit, so the
+    address no longer appears in URLs or reverse-proxy access logs.
+    Advertised as `capabilities.recipient_lookup_post`. **Deprecated:**
+    `GET /v1/shares/recipients?email=` stays only for older clients; new
+    clients use it only when the capability is absent. The server's own
+    access log records the route template only (never query strings or
+    bodies).
 
 - Protocol 1.7 (2026-10-21, server 0.1.16, additive): new-device protection
   (security audit S1), active only while the server advertises

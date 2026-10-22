@@ -51,6 +51,11 @@ pub struct ServerCapabilities {
     /// `CreateShareRequest.restored_from`, protocol 1.8).
     #[serde(default)]
     pub share_restore: bool,
+    /// Sharing recipient lookup by `POST /v1/shares/recipients/lookup`
+    /// with the e-mail in the body (protocol 1.8); clients then stop
+    /// putting the address into `GET /v1/shares/recipients?email=`.
+    #[serde(default)]
+    pub recipient_lookup_post: bool,
 }
 
 fn default_true() -> bool {
@@ -101,5 +106,6 @@ mod tests {
         assert!(info.capabilities.share_leave);
         assert!(info.capabilities.share_restore);
         assert!(!info.capabilities.device_protection);
+        assert!(!info.capabilities.recipient_lookup_post);
     }
 }

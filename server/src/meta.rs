@@ -30,6 +30,7 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
             device_protection: state.config.device_protection.enabled,
             share_leave: sharing,
             share_restore: sharing,
+            recipient_lookup_post: sharing,
         },
     }
 }
