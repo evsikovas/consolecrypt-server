@@ -28,6 +28,7 @@ pub mod paths;
 pub mod recovery;
 pub mod sharing;
 pub mod sharing_enrollment;
+pub mod sharing_notes;
 pub mod sync;
 pub mod vaults;
 pub mod version;

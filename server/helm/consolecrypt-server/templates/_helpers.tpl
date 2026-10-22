@@ -123,13 +123,13 @@ the server default applies. Integers are rendered without exponent notation.
 {{- define "consolecrypt-server.configData" -}}
 {{- $c := .Values.config }}
 {{- $sharing := dict }}
-{{- range $name := list "objectSharingEnabled" "sharedGroupsEnabled" "sharedSecretsEnabled" "sharedKubeContextsEnabled" "sharedDbConnectionsEnabled" "sharingOwnerOnlineEnrollmentEnabled" }}
+{{- range $name := list "objectSharingEnabled" "sharedGroupsEnabled" "sharedSecretsEnabled" "sharedKubeContextsEnabled" "sharedDbConnectionsEnabled" "sharedNotesEnabled" "sharingOwnerOnlineEnrollmentEnabled" }}
 {{- $value := false }}
 {{- if hasKey $c $name }}{{- $value = get $c $name }}{{- end }}
 {{- if not (kindIs "bool" $value) }}{{- fail (printf "config.%s must be a boolean" $name) }}{{- end }}
 {{- $_ := set $sharing $name $value }}
 {{- end }}
-{{- $extensions := or $sharing.sharedGroupsEnabled $sharing.sharedSecretsEnabled $sharing.sharedKubeContextsEnabled $sharing.sharedDbConnectionsEnabled $sharing.sharingOwnerOnlineEnrollmentEnabled }}
+{{- $extensions := or $sharing.sharedGroupsEnabled $sharing.sharedSecretsEnabled $sharing.sharedKubeContextsEnabled $sharing.sharedDbConnectionsEnabled $sharing.sharedNotesEnabled $sharing.sharingOwnerOnlineEnrollmentEnabled }}
 {{- if and $extensions (not $sharing.objectSharingEnabled) }}
 {{- fail "sharing extensions require config.objectSharingEnabled=true" }}
 {{- end }}
@@ -159,6 +159,7 @@ the server default applies. Integers are rendered without exponent notation.
   "CC_SHARED_SECRETS_ENABLED" $sharing.sharedSecretsEnabled
   "CC_SHARED_KUBE_CONTEXTS_ENABLED" $sharing.sharedKubeContextsEnabled
   "CC_SHARED_DB_CONNECTIONS_ENABLED" $sharing.sharedDbConnectionsEnabled
+  "CC_SHARED_NOTES_ENABLED" $sharing.sharedNotesEnabled
   "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED" $sharing.sharingOwnerOnlineEnrollmentEnabled
   "CC_DEVICE_PROTECTION_ENABLED" $dpEnabled
   "CC_NEW_DEVICE_MAIL_ENABLED" $dp.newDeviceMail

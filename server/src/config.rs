@@ -55,6 +55,8 @@ pub struct Config {
     pub shared_secrets_enabled: bool,
     pub shared_kube_contexts_enabled: bool,
     pub shared_db_connections_enabled: bool,
+    /// Notes travelling with shares (`share_notes_v1`); requires sharing.
+    pub shared_notes_enabled: bool,
     /// Owner-online enrollment; requires sharing and strict device proofs.
     pub sharing_owner_online_enrollment_enabled: bool,
     pub event_bus: EventBusKind,
@@ -303,6 +305,11 @@ impl Config {
                 "CC_SHARED_DB_CONNECTIONS_ENABLED",
                 false,
             )?,
+            shared_notes_enabled: parse_bool(
+                get("CC_SHARED_NOTES_ENABLED"),
+                "CC_SHARED_NOTES_ENABLED",
+                false,
+            )?,
             sharing_owner_online_enrollment_enabled: parse_bool(
                 get("CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED"),
                 "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED",
@@ -469,7 +476,8 @@ impl Config {
         if (self.shared_groups_enabled
             || self.shared_secrets_enabled
             || self.shared_kube_contexts_enabled
-            || self.shared_db_connections_enabled)
+            || self.shared_db_connections_enabled
+            || self.shared_notes_enabled)
             && (!self.object_sharing_enabled || !self.require_request_proof)
         {
             return err("extended shared kinds require object sharing and strict request proofs");
@@ -602,6 +610,7 @@ impl fmt::Debug for Config {
                 "shared_db_connections_enabled",
                 &self.shared_db_connections_enabled,
             )
+            .field("shared_notes_enabled", &self.shared_notes_enabled)
             .field(
                 "sharing_owner_online_enrollment_enabled",
                 &self.sharing_owner_online_enrollment_enabled,
@@ -751,6 +760,7 @@ mod sharing_config_tests {
             "CC_SHARED_SECRETS_ENABLED",
             "CC_SHARED_KUBE_CONTEXTS_ENABLED",
             "CC_SHARED_DB_CONNECTIONS_ENABLED",
+            "CC_SHARED_NOTES_ENABLED",
             "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED",
         ] {
             let load = |sharing: bool, proofs: bool, value: &str| {
@@ -781,6 +791,10 @@ mod sharing_config_tests {
             assert_eq!(
                 config.shared_db_connections_enabled,
                 flag == "CC_SHARED_DB_CONNECTIONS_ENABLED"
+            );
+            assert_eq!(
+                config.shared_notes_enabled,
+                flag == "CC_SHARED_NOTES_ENABLED"
             );
             assert_eq!(
                 config.sharing_owner_online_enrollment_enabled,

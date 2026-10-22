@@ -217,6 +217,9 @@ pub struct SharingCapabilities {
     pub supports_db_connections: bool,
     #[serde(default)]
     pub supports_owner_online_enrollment_v1: bool,
+    /// Notes travelling with shares (`sharing_notes`).
+    #[serde(default)]
+    pub supports_notes_v1: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

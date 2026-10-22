@@ -5,6 +5,7 @@ mod enrollment;
 mod enrollment_handlers;
 mod enrollment_store;
 pub mod handlers;
+mod notes;
 pub mod service;
 mod store;
 

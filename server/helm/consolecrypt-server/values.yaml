@@ -272,6 +272,8 @@ config:
   sharedSecretsEnabled: false
   sharedKubeContextsEnabled: false
   sharedDbConnectionsEnabled: false
+  # -- Notes attached to shares (share_notes_v1); needs objectSharingEnabled.
+  sharedNotesEnabled: false
   sharingOwnerOnlineEnrollmentEnabled: false
   # -- New-device protection (server 0.1.16, protocol 1.7). Off by default.
   # Deploy the web account page that handles `#action=deny-device` before

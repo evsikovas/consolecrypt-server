@@ -67,6 +67,7 @@ def create(directory, domain, mail):
         "CC_SHARED_SECRETS_ENABLED": "false",
         "CC_SHARED_KUBE_CONTEXTS_ENABLED": "false",
         "CC_SHARED_DB_CONNECTIONS_ENABLED": "false",
+        "CC_SHARED_NOTES_ENABLED": "false",
         "CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED": "false",
         "CC_DEVICE_PROTECTION_ENABLED": "false",
     }

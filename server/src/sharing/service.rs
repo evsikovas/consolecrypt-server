@@ -40,7 +40,10 @@ fn bindings(m: &AccessManifest) -> Vec<(Uuid, Uuid)> {
         .map(|v| (v.user_id.into(), v.device_id.into()))
         .collect()
 }
-fn member<'a>(m: &'a AccessManifest, auth: &AuthContext) -> AppResult<&'a SharingMember> {
+pub(super) fn member<'a>(
+    m: &'a AccessManifest,
+    auth: &AuthContext,
+) -> AppResult<&'a SharingMember> {
     m.members
         .iter()
         .find(|v| v.device_id == auth.device_id && v.user_id == auth.user_id)
@@ -489,7 +492,7 @@ async fn transition_in_transaction(
     ))
 }
 
-async fn authorized_item(
+pub(super) async fn authorized_item(
     config: &Config,
     conn: &mut PgConnection,
     auth: &AuthContext,
@@ -657,6 +660,7 @@ pub async fn capabilities(state: &AppState, auth: &AuthContext) -> AppResult<Sha
         supports_kube_contexts: state.config.shared_kube_contexts_enabled,
         supports_db_connections: state.config.shared_db_connections_enabled,
         supports_owner_online_enrollment_v1: state.config.sharing_owner_online_enrollment_enabled,
+        supports_notes_v1: state.config.shared_notes_enabled,
     })
 }
 

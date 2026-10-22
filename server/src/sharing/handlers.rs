@@ -27,6 +27,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/shares/{id}/access", post(rotate))
         .route("/v1/shares/{id}/history", get(history))
         .merge(super::enrollment_handlers::routes())
+        .merge(super::notes::routes())
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }
 async fn capabilities(

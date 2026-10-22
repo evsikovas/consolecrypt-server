@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Shared notes (additive; protocol minor number assigned at merge after 1.8
+  enterprise-auth and 1.9 teams), advertised as `supports_notes_v1` in
+  `GET /v1/shares/capabilities` (`CC_SHARED_NOTES_ENABLED`, default off):
+  - `cc_protocol::sharing_notes`: `SharedNotesKeySet` (owner-signed notes key
+    of an access epoch, wrapped per member device like a revision DEK, labels
+    `notes-key-set`, `notes-envelope-aad`, `notes-envelope-key`),
+    `SharedNote` (XChaCha20-Poly1305 under HKDF(notes key, salt = note id,
+    info = `note-key` ‖ epoch); AAD `note-aad`; the author device signs
+    `note` over the payload hash, excluding the epoch so the owner can rekey).
+  - `GET /v1/shares/{id}/notes`, `PUT /v1/shares/{id}/notes/keys` (owner
+    device, current epoch, envelopes exactly for the member devices, never
+    replaced), `PUT|DELETE /v1/shares/{id}/notes/{note_id}` (any member writes
+    its own notes, revision + 1, current epoch; owner may delete any),
+    `POST /v1/shares/{id}/notes/rekey` (owner device moves notes of earlier
+    epochs into the current one, keeping authorship and signatures).
+  - Limits: 500 notes per share, 288 KiB + 16 ciphertext per note, 100 notes
+    per rekey request. Migration `0011_share_notes`.
+
 - Protocol 1.7 (2026-10-21, server 0.1.16, additive): new-device protection
   (security audit S1), active only while the server advertises
   `capabilities.device_protection` in `/v1/meta` (new `ServerInfo.capabilities`
