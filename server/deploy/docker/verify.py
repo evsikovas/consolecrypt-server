@@ -195,12 +195,12 @@ def main():
                        "WHERE datname='consolecrypt';") == "consolecrypt"
             migrations = sql("SELECT string_agg(version::text, ',' ORDER BY version) "
                              "FROM _sqlx_migrations WHERE success;")
-            assert migrations == "1,2,3,4,6,7,8"
+            assert migrations == "1,2,3,4,6,7,8,9"
             instance = sql("SELECT instance_id FROM sharing_instance;")
             marker = uuid.uuid4().hex
             sql("CREATE TABLE compose_verification_marker(value text PRIMARY KEY); "
                 f"INSERT INTO compose_verification_marker VALUES ('{marker}');")
-            checks.append("nonroot read-only server; database-owner role is not a superuser; migrations 1,2,3,4,6,7,8")
+            checks.append("nonroot read-only server; database-owner role is not a superuser; migrations 1,2,3,4,6,7,8,9")
             checks.append("HTTP healthz/readyz/meta/auth; no website; strict proofs and sharing defaults")
             ca = private / "local-ca.crt"
             cc("cp", "caddy:/data/caddy/pki/authorities/local/root.crt", str(ca))
