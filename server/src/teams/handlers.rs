@@ -9,6 +9,7 @@ use crate::auth::AuthContext;
 use crate::crypto;
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery, ClientIp};
+use crate::mail;
 use crate::state::AppState;
 use crate::util::{enum_str, normalize_email, parse_enum};
 use crate::vaults::envelopes;
@@ -626,6 +627,14 @@ pub async fn invite(
             created = Some((UserId::from(invitee), id));
         }
     }
+    let inviter_email: Option<String> = if created.is_some() {
+        sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(Uuid::from(auth.user_id))
+            .fetch_optional(&mut *tx)
+            .await?
+    } else {
+        None
+    };
     AuditEvent::new(AuditType::TeamInvited)
         .user(auth.user_id)
         .device(auth.device_id)
@@ -640,6 +649,16 @@ pub async fn invite(
             .events
             .publish_user(user, ServerEvent::TeamInvitationReceived { invitation_id })
             .await;
+        mail::send_in_background(
+            state.mailer.clone(),
+            mail::templates::team_invitation(
+                &email,
+                inviter_email.as_deref().unwrap_or("—"),
+                &enum_str(&req.role),
+                note.as_deref(),
+                state.config.public_url.as_deref(),
+            ),
+        );
     }
     Ok(StatusCode::ACCEPTED)
 }

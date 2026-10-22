@@ -31,6 +31,7 @@ pub enum MailKind {
     NewDevice,
     EnvelopeAbuse,
     PasswordResetCompleted,
+    TeamInvitation,
 }
 
 impl MailKind {
@@ -44,6 +45,7 @@ impl MailKind {
             MailKind::NewDevice => "new_device",
             MailKind::EnvelopeAbuse => "envelope_abuse",
             MailKind::PasswordResetCompleted => "password_reset_completed",
+            MailKind::TeamInvitation => "team_invitation",
         }
     }
 }
@@ -382,6 +384,40 @@ pub mod templates {
                 footer(public_url),
                 name = info.name,
                 platform = info.platform,
+            ),
+        }
+    }
+
+    /// Teams (protocol 1.9): an account was invited into a team. The team
+    /// name is end-to-end encrypted, so only the inviter, the role and the
+    /// inviter's plain-text note can be shown.
+    pub fn team_invitation(
+        to: &str,
+        inviter: &str,
+        role: &str,
+        note: Option<&str>,
+        public_url: Option<&str>,
+    ) -> MailMessage {
+        let note_ru = note
+            .map(|n| format!("\n\nКомментарий приглашения: {n}"))
+            .unwrap_or_default();
+        let note_en = note
+            .map(|n| format!("\n\nInvitation note: {n}"))
+            .unwrap_or_default();
+        MailMessage {
+            kind: MailKind::TeamInvitation,
+            to: to.to_owned(),
+            subject: "ConsoleCrypt — приглашение в команду / Team invitation".to_owned(),
+            body: format!(
+                "{inviter} приглашает вас в команду ConsoleCrypt (роль: {role}).{note_ru}\n\n\
+                 Откройте ConsoleCrypt → Настройки → Команды, примите приглашение и сверьте \
+                 код с {inviter} — по телефону или лично. Доступ появится только после того, \
+                 как коды совпадут. Если вы не ждали приглашения, просто отклоните его.\n\n\
+                 {inviter} invited you to a ConsoleCrypt team (role: {role}).{note_en}\n\n\
+                 Open ConsoleCrypt → Settings → Teams, accept the invitation and compare the \
+                 code with {inviter} by phone or in person. Access is granted only after the \
+                 codes match. If you did not expect this, decline it.{}",
+                footer(public_url)
             ),
         }
     }

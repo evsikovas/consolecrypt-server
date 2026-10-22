@@ -7,6 +7,8 @@
 
 mod common;
 
+use consolecrypt_server::mail::MailKind;
+
 use cc_protocol::envelopes::{
     EnvelopeAlgorithm, EnvelopeKind, EnvelopeMetadata, NewEnvelope, RecipientType,
 };
@@ -173,6 +175,18 @@ async fn team_lifecycle() {
         )
         .await;
     assert_eq!(st, StatusCode::ACCEPTED);
+    // One invitation mail, to the existing account only.
+    srv.mailer.wait_for(MailKind::TeamInvitation, 1).await;
+    {
+        let mails = srv.mailer.messages.lock().unwrap();
+        let invites: Vec<_> = mails
+            .iter()
+            .filter(|(k, _, _)| *k == MailKind::TeamInvitation)
+            .collect();
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].1, b.email.to_lowercase());
+        assert!(invites[0].2.contains("Ops") && invites[0].2.contains("editor"));
+    }
     // Non-members cannot invite.
     let (st, _) = srv
         .post(
