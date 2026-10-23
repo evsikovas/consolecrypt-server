@@ -31,6 +31,12 @@
 | [Enterprise-вход](ENTERPRISE.md) через IdP (OIDC) или Active Directory (LDAP) | `CC_AUTH_MODE=enterprise` | `standard` |
 | [Квоты и лимиты запросов](#квоты-и-лимиты-запросов) | `CC_QUOTAS_V2_ENABLED`, `CC_RATE_LIMIT_MODE` | квоты включены, лимиты в режиме `observe` |
 
+Все параметры сервера с допустимыми значениями, значениями по умолчанию и путями
+Helm перечислены в [CONFIGURATION.md](CONFIGURATION.md). Как задать любой из них
+в Docker Compose, `docker run`, Helm, JSON-файле или systemd, с готовыми
+примерами, — в разделе [Как задать любой параметр](#как-задать-любой-параметр).
+English: [configuration methods and worked examples](#english).
+
 ## Docker Compose
 
 Установка на одном сервере без Kubernetes.
@@ -103,7 +109,8 @@ python3 server/deploy/docker/init-config.py \
 переменные текущего shell имеют приоритет: используйте чистый терминал.
 Подробности — в [документации Docker об интерполяции](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/).
 Доступ к Docker daemon позволяет читать переменные контейнера; ограничьте его
-администраторами. Сервер не понимает `*_FILE`: пароль базы передаётся отдельным
+администраторами. Общего механизма `*_FILE` у сервера нет (из файлов читаются
+только секреты enterprise-входа): пароль базы передаётся отдельным
 `CC_DATABASE_PASSWORD`, без помещения в URL. Shell-wrapper для distroless не нужен.
 
 ### Запустите PostgreSQL, API и HTTPS
@@ -793,7 +800,8 @@ cc_kubectl exec deployment/consolecrypt -- \
 и не меняйте PostgreSQL 16 на другой major простой заменой тега. Смена major
 PostgreSQL требует отдельного плана переноса данных.
 
-Параметры запуска без Helm: [server/.env.example](../../server/.env.example).
+Все параметры запуска: [CONFIGURATION.md](CONFIGURATION.md) (пример файла окружения —
+[server/.env.example](../../server/.env.example)).
 
 ### Общие подключения Kubernetes
 
@@ -1019,6 +1027,507 @@ cc_kubectl exec deployment/consolecrypt -- /usr/local/bin/consolecrypt-server ad
 `cc_sync_unknown_deletes_total`, `cc_tombstones_total`,
 `cc_auth_known_device_bypass_total`, `cc_recovery_mail_suppressed_total`.
 
+## Как задать любой параметр
+
+Имена параметров везде одинаковые — переменные `CC_*` из
+[CONFIGURATION.md](CONFIGURATION.md). Правила для всех способов установки:
+
+- переменная окружения процесса важнее значения из JSON-файла, а пустая
+  переменная означает «не задано» (действует значение по умолчанию);
+- переменная с опечаткой в имени молча игнорируется, а неверное **значение**
+  останавливает запуск с сообщением `invalid configuration: <КЛЮЧ>: …`;
+- изменения применяются только после перезапуска процесса (кроме
+  `admin limits set`, см. [квоты и лимиты](#квоты-и-лимиты-запросов));
+- секреты enterprise-входа — только файлами (`*_FILE`), пароли базы и SMTP — через
+  окружение или приватный JSON-файл.
+
+Проверить результат можно тремя способами: строка `starting` в журнале сервера
+содержит действующую конфигурацию (пароли скрыты); `/v1/meta` показывает
+регистрацию, подтверждение почты, режим входа, команды и защиту устройств;
+`admin limits show` и `admin auth status` показывают лимиты, квоты и вход.
+
+### Docker Compose
+
+Compose передаёт серверу только переменные из блока `environment:` сервиса
+`server`. Файл `server.env` подставляется в `compose.yaml` (`--env-file`), но сам в
+контейнер не попадает: строка `CC_LIMIT_PUSH_ACCOUNT_RATE=600/min` в
+`server.env` ничего не изменит, если `compose.yaml` её не использует.
+
+**1. Ключи, которые меняются в `server.env`.** В `compose.yaml` они записаны как
+`${КЛЮЧ:-значение}`: `CC_DATABASE_PASSWORD`, `CC_RUN_MIGRATIONS`,
+`CC_REGISTRATION_OPEN`, `CC_MAIL_TRANSPORT`, `CC_MAIL_FROM`, `CC_SMTP_HOST`,
+`CC_SMTP_PORT`, `CC_SMTP_TLS`, `CC_SMTP_USERNAME`, `CC_SMTP_PASSWORD`,
+`CC_OBJECT_SHARING_ENABLED`, `CC_SHARED_GROUPS_ENABLED`, `CC_SHARED_SECRETS_ENABLED`,
+`CC_SHARED_KUBE_CONTEXTS_ENABLED`, `CC_SHARED_DB_CONNECTIONS_ENABLED`,
+`CC_SHARED_NOTES_ENABLED`, `CC_SHARING_OWNER_ONLINE_ENROLLMENT_ENABLED`,
+`CC_DEVICE_PROTECTION_ENABLED`, `CC_NEW_DEVICE_MAIL_ENABLED`,
+`CC_DEVICE_QUARANTINE_DAYS`, `CC_TEAMS_ENABLED`, `CC_RATE_LIMIT_MODE`,
+`CC_QUOTAS_V2_ENABLED`, `CC_MAX_DEVICES_PER_ACCOUNT`, `CC_MAX_VAULT_OBJECTS`.
+Кроме них `server.env` содержит переменные самого Compose: `CC_SERVER_VERSION`,
+`CC_SERVER_IMAGE`, `CC_DOMAIN`, `CC_HTTP_PORT`, `CC_POSTGRES_ADMIN_PASSWORD`.
+Значения со знаками `$`, `#`, пробелами или кавычками записывайте в одинарных
+кавычках.
+
+**2. Все остальные ключи — в `compose.override.yaml`.** Это и ключи, которых нет в
+`compose.yaml` (лимиты `CC_LIMIT_*`, `CC_MAX_VAULT_BYTES`, `CC_MAX_TEAM_MEMBERS`,
+`CC_AUTH_*`, `CC_OIDC_*`, `CC_LDAP_*`, сроки хранения…), и ключи, которые
+`compose.yaml` задаёт жёстко: `CC_DATABASE_URL`, `CC_DATABASE_CONNECT_TIMEOUT_SECS`,
+`CC_LISTEN_ADDR`, `CC_METRICS_LISTEN`, `CC_PUBLIC_URL`,
+`CC_REQUIRE_EMAIL_VERIFICATION`, `CC_REQUIRE_REQUEST_PROOF`,
+`CC_TRUST_PROXY_HEADERS`, `CC_EVENT_BUS`, `CC_HSTS`, `CC_LOG_FORMAT`. Значения
+`environment:` из override-файла заменяют одноимённые значения `compose.yaml`.
+Файл лежит в приватном каталоге рядом с `server.env`; значения записывайте
+строками в кавычках:
+
+```yaml
+# $CC_INSTALL_DIR/compose.override.yaml
+services:
+  server:
+    environment:
+      CC_MAX_VAULT_BYTES: "2147483648"
+      CC_LIMIT_PUSH_ACCOUNT_RATE: "600/min"
+      CC_LOG: "info,sqlx=warn"
+```
+
+Подключите его вторым `-f` (без него Compose файл из другого каталога не читает)
+и используйте эту функцию для **всех** команд — обновления, `admin`, резервных
+копий:
+
+```sh
+cc_compose() {
+  docker compose --env-file "$CC_INSTALL_DIR/server.env" \
+    -f "$CC_COMPOSE_FILE" -f "$CC_INSTALL_DIR/compose.override.yaml" \
+    --profile https "$@"
+}
+```
+
+Пути внутри override-файла пишите абсолютными. Можно добавить сервису и
+`env_file: [/абсолютный/путь/extra.env]`, но значения из `environment:`
+`compose.yaml` важнее `env_file`, поэтому ключи из списков выше всё равно задаются
+в `environment:`.
+
+**3. Файлы секретов** (только ключи `*_FILE` enterprise-входа и CA-сертификаты).
+Compose без Swarm монтирует `secrets:` как обычные файлы в `/run/secrets/<имя>` с
+владельцем и правами хоста. Сервер в образе работает как UID 65532 и только
+читает их:
+
+```sh
+sudo chown 65532:65532 "$CC_INSTALL_DIR"/secrets/*
+sudo chmod 0400 "$CC_INSTALL_DIR"/secrets/*
+```
+
+```yaml
+services:
+  server:
+    environment:
+      CC_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
+    secrets: [oidc-client-secret]
+secrets:
+  oidc-client-secret:
+    file: /home/admin/.config/consolecrypt-docker/secrets/oidc-client-secret
+```
+
+Вместо `secrets:` подойдёт и монтирование только для чтения:
+`volumes: ["/home/admin/.config/consolecrypt-docker/secrets:/run/secrets/consolecrypt:ro"]`.
+Пароли базы и SMTP остаются в `server.env`: сервер не читает их из файлов.
+
+**4. Применить и проверить.**
+
+```sh
+cc_compose config --quiet
+cc_compose up -d --wait --wait-timeout 180 server
+cc_compose logs --no-log-prefix server | grep '"starting"' | tail -n 1
+curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits show
+```
+
+`up -d` пересоздаёт контейнер, только если его конфигурация изменилась; данные
+в томах сохраняются. Не используйте `down -v`.
+
+### docker run без Compose
+
+Те же ключи передаются флагами `-e КЛЮЧ=значение` или файлом `--env-file`. Учтите:
+`docker run --env-file` берёт значения буквально, **кавычки не снимаются**, поэтому
+`server.env` от `init-config.py` (значения в кавычках) для него не подходит —
+пишите значения без кавычек. Пароли удобнее держать в приватном JSON-файле,
+смонтированном только для чтения:
+
+```sh
+sudo install -d -m 0750 /etc/consolecrypt
+sudo install -m 0400 -o 65532 -g 65532 server.json /etc/consolecrypt/server.json
+docker run -d --name consolecrypt-server --restart unless-stopped \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 \
+  -v /etc/consolecrypt/server.json:/etc/consolecrypt/server.json:ro \
+  -v /etc/consolecrypt/secrets:/run/secrets/consolecrypt:ro \
+  -e CC_TRUST_PROXY_HEADERS=true \
+  "ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION" \
+  --config /etc/consolecrypt/server.json serve
+```
+
+`CC_SERVER_VERSION` — версия выпуска сервера (как в примере Docker Compose).
+Образ уже задаёт `CC_LISTEN_ADDR=0.0.0.0:8080`, `CC_METRICS_LISTEN=0.0.0.0:9090`,
+`CC_LOG_FORMAT=json` и `CC_SOURCE_CODE_URL`; переменные окружения контейнера
+важнее JSON-файла, поэтому эти четыре ключа меняйте флагом `-e`, а не в файле.
+Изменение параметров — `docker rm -f consolecrypt-server` и тот же `docker run`
+(данные в PostgreSQL, контейнер их не хранит). Команды администратора:
+`docker exec consolecrypt-server /usr/local/bin/consolecrypt-server --config
+/etc/consolecrypt/server.json admin …`.
+
+### Kubernetes: Helm
+
+Chart превращает блоки values в переменные `CC_*`: несекретные — в ConfigMap,
+URL базы и SMTP-пароль — в Secret или ссылки `secretKeyRef` на ваш Secret.
+Соответствие каждого `CC_*` пути values дано в столбце «Helm»
+[CONFIGURATION.md](CONFIGURATION.md). Пустые строки в values пропускаются — тогда
+действует значение сервера по умолчанию.
+
+| Что | Где в values |
+|---|---|
+| флаги, токены, квоты, лимиты, WebSocket, обслуживание, журнал | `config.*` (`config.rateLimit.limits` — `CC_LIMIT_*`) |
+| enterprise-вход | `auth.*`, секреты — `auth.oidc.existingSecret` / `auth.ldap.existingSecret` |
+| почта | `mail.*`, пароль — `mail.smtp.existingSecret` |
+| база данных | `database.*` или `postgresql.*`, миграции — `migrations.*` |
+| метрики | `metrics.enabled` (`CC_METRICS_LISTEN`) |
+| ключи без пути в chart (`CC_TEAMS_ENABLED`, `CC_MAX_TEAMS_PER_ACCOUNT`, `CC_MAX_TEAM_MEMBERS`, `RUST_LOG`, `OTEL_*`, внешний `CC_DATABASE_PASSWORD`) | `extraEnv` |
+
+```yaml
+extraEnv:
+  - name: CC_MAX_TEAM_MEMBERS
+    value: "50"
+  - name: CC_DATABASE_PASSWORD          # пароль внешней базы отдельно от URL
+    valueFrom:
+      secretKeyRef: {name: consolecrypt-database, key: password}
+```
+
+Переменные из `extraEnv` (раздел `env` контейнера) важнее ConfigMap chart
+(`envFrom`), а `extraEnvFrom` подключается после ConfigMap chart и тоже
+перекрывает его. Пользуйтесь этим только для ключей без собственного пути —
+иначе значение в values и действующее значение разойдутся.
+
+Применение — `helm upgrade` с **полным** приватным values-файлом: pods
+перезапускаются сами, потому что меняется контрольная сумма ConfigMap. После
+изменения содержимого вашего существующего Secret перезапустите их вручную:
+
+```sh
+cc_helm upgrade consolecrypt server/helm/consolecrypt-server \
+  -f "$CC_INSTALL_DIR/values.yaml" --history-max 10 --wait --timeout 10m
+cc_kubectl rollout restart deployment/consolecrypt   # только после смены Secret
+cc_kubectl get configmap consolecrypt -o yaml        # несекретные CC_* как их видит pod
+cc_kubectl exec deployment/consolecrypt -- /usr/local/bin/consolecrypt-server admin limits show
+```
+
+### JSON-файл, бинарный файл и systemd
+
+Без контейнеров настройки удобнее хранить в приватном JSON-файле
+(`--config /etc/consolecrypt/server.json` или переменная `CC_CONFIG_FILE`). Файл —
+один JSON-объект, значения только строками, права `0600` или `0400`, владелец —
+пользователь службы. Неизвестный или повторённый ключ, неверный JSON или
+недоступный файл останавливают запуск без вывода содержимого. `CC_LOG`,
+`RUST_LOG` и `OTEL_*` в файл не принимаются — задайте их в окружении службы.
+Пример — [server.example.json](../../server/deploy/native/server.example.json),
+unit-файл — [consolecrypt-server.service](../../server/deploy/native/consolecrypt-server.service),
+подробности — [native/README.md](../../server/deploy/native/README.md).
+
+```json
+{
+  "CC_DATABASE_URL": "postgres://consolecrypt@127.0.0.1:5432/consolecrypt?sslmode=disable",
+  "CC_DATABASE_PASSWORD": "<пароль базы>",
+  "CC_LISTEN_ADDR": "127.0.0.1:8080",
+  "CC_METRICS_LISTEN": "127.0.0.1:9090",
+  "CC_TRUST_PROXY_HEADERS": "true",
+  "CC_REQUIRE_EMAIL_VERIFICATION": "true",
+  "CC_MAIL_TRANSPORT": "smtp",
+  "CC_MAIL_FROM": "ConsoleCrypt <no-reply@example.org>",
+  "CC_SMTP_HOST": "smtp.example.org",
+  "CC_SMTP_USERNAME": "mailer@example.org",
+  "CC_SMTP_PASSWORD": "<пароль SMTP>",
+  "CC_RATE_LIMIT_MODE": "enforce"
+}
+```
+
+Переменную окружения для службы добавляют drop-in файлом
+(`sudo systemctl edit consolecrypt-server`):
+
+```ini
+[Service]
+Environment=CC_LOG=info,sqlx=warn
+```
+
+После правки файла или окружения: `sudo systemctl restart consolecrypt-server`,
+затем `sudo -u consolecrypt consolecrypt-server --config
+/etc/consolecrypt/server.json healthcheck` и
+`journalctl -u consolecrypt-server | grep starting | tail -n 1`. Пароль базы можно
+не хранить в JSON-файле: если пароля нет ни в `CC_DATABASE_PASSWORD`, ни в URL,
+драйвер берёт стандартную переменную `PGPASSWORD` из окружения службы.
+
+### Пример: общие заметки и команды
+
+Общие заметки требуют основного флага совместного доступа; команды включены по
+умолчанию и от него не зависят.
+
+Docker Compose — в `server.env`, затем `cc_compose up -d --wait --wait-timeout 180 server`:
+
+```dotenv
+CC_OBJECT_SHARING_ENABLED=true
+CC_SHARED_NOTES_ENABLED=true
+CC_TEAMS_ENABLED=true
+```
+
+Лимиты команд — в `compose.override.yaml`:
+
+```yaml
+services:
+  server:
+    environment:
+      CC_MAX_TEAMS_PER_ACCOUNT: "20"
+      CC_MAX_TEAM_MEMBERS: "50"
+```
+
+Helm:
+
+```yaml
+config:
+  requireRequestProof: true
+  objectSharingEnabled: true
+  sharedNotesEnabled: true
+extraEnv:
+  - name: CC_TEAMS_ENABLED
+    value: "true"
+  - name: CC_MAX_TEAM_MEMBERS
+    value: "50"
+```
+
+JSON: `"CC_OBJECT_SHARING_ENABLED": "true", "CC_SHARED_NOTES_ENABLED": "true",
+"CC_MAX_TEAM_MEMBERS": "50"`. Проверка: `/v1/meta` → `capabilities.teams: true`;
+поддержку заметок клиент видит в `/v1/shares/capabilities` (`supports_notes_v1`).
+`CC_TEAMS_ENABLED` принимает только `true` или `false`.
+
+### Пример: корпоративный вход через Entra ID
+
+Регистрация приложения в Entra ID описана в
+[ENTERPRISE.md](ENTERPRISE.md#microsoft-entra-id). Redirect URI —
+`https://sync.example.org/v1/auth/oidc/callback`.
+
+Docker Compose. Секреты:
+
+```sh
+mkdir -p "$CC_INSTALL_DIR/secrets"
+( umask 077
+  openssl rand -hex 32 > "$CC_INSTALL_DIR/secrets/oidc-token-key"
+  read -rs CC_SECRET && printf '%s' "$CC_SECRET" > "$CC_INSTALL_DIR/secrets/oidc-client-secret"
+  unset CC_SECRET )
+sudo chown 65532:65532 "$CC_INSTALL_DIR"/secrets/*
+sudo chmod 0400 "$CC_INSTALL_DIR"/secrets/*
+```
+
+`$CC_INSTALL_DIR/compose.override.yaml` (замените `/home/admin/.config/consolecrypt-docker`
+своим `$CC_INSTALL_DIR`):
+
+```yaml
+services:
+  server:
+    environment:
+      CC_PUBLIC_URL: https://sync.example.org
+      CC_AUTH_MODE: enterprise
+      CC_AUTH_PROVIDER: oidc
+      CC_AUTH_DISPLAY_NAME: Example SSO
+      CC_AUTH_ALLOWED_DOMAINS: example.org
+      CC_OIDC_PRESET: entra
+      CC_OIDC_ISSUER: https://login.microsoftonline.com/<tenant-id>/v2.0
+      CC_OIDC_CLIENT_ID: <application-client-id>
+      CC_OIDC_REQUIRED_CLAIM: roles=ConsoleCrypt.User
+      CC_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
+      CC_OIDC_TOKEN_KEY_FILE: /run/secrets/oidc-token-key
+    secrets: [oidc-client-secret, oidc-token-key]
+secrets:
+  oidc-client-secret:
+    file: /home/admin/.config/consolecrypt-docker/secrets/oidc-client-secret
+  oidc-token-key:
+    file: /home/admin/.config/consolecrypt-docker/secrets/oidc-token-key
+```
+
+```sh
+cc_compose config --quiet
+cc_compose up -d --wait --wait-timeout 180 server
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin auth test
+```
+
+Caddy из примера отдаёт только API: ссылки в письмах на
+`https://sync.example.org/account` вернут 404, коды из писем работают в приложении.
+
+Helm. Secret и values:
+
+```sh
+cc_kubectl create secret generic consolecrypt-oidc \
+  --from-file=client-secret="$CC_INSTALL_DIR/secrets/oidc-client-secret" \
+  --from-file=token-key="$CC_INSTALL_DIR/secrets/oidc-token-key"
+```
+
+```yaml
+config:
+  publicUrl: https://sync.example.org
+auth:
+  mode: enterprise
+  provider: oidc
+  displayName: Example SSO
+  allowedDomains: [example.org]
+  oidc:
+    preset: entra
+    issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
+    clientId: <application-client-id>
+    requiredClaim: roles=ConsoleCrypt.User
+    existingSecret: consolecrypt-oidc
+```
+
+JSON или systemd — те же ключи, что в override-файле, а `*_FILE` указывают на
+файлы с правами `0400`, принадлежащие пользователю службы, например
+`/etc/consolecrypt/secrets/oidc-client-secret`.
+
+### Пример: вход через Active Directory (LDAP)
+
+Подготовка учётки и сертификата — [ENTERPRISE.md](ENTERPRISE.md#active-directory-и-ldap).
+Docker Compose, `compose.override.yaml` (файлы `ldap-bind-password` и `ad-ca.pem` в
+`$CC_INSTALL_DIR/secrets`, владелец 65532, права `0400`):
+
+```yaml
+services:
+  server:
+    environment:
+      CC_AUTH_MODE: enterprise
+      CC_AUTH_PROVIDER: ldap
+      CC_AUTH_DISPLAY_NAME: ACME
+      CC_AUTH_ALLOWED_DOMAINS: acme.com
+      CC_LDAP_URL: ldaps://dc1.acme.local:636
+      CC_LDAP_CA_FILE: /run/secrets/ad-ca.pem
+      CC_LDAP_BIND_DN: CN=svc-consolecrypt,OU=Service,DC=acme,DC=local
+      CC_LDAP_BIND_PASSWORD_FILE: /run/secrets/ldap-bind-password
+      CC_LDAP_BASE_DN: DC=acme,DC=local
+      CC_LDAP_REQUIRED_GROUP: CN=ConsoleCrypt,OU=Groups,DC=acme,DC=local
+      CC_LDAP_MAX_FAILURES: "3"
+      CC_LDAP_FAILURE_WINDOW_MINUTES: "30"
+    secrets: [ldap-bind-password, ad-ca.pem]
+secrets:
+  ldap-bind-password:
+    file: /home/admin/.config/consolecrypt-docker/secrets/ldap-bind-password
+  ad-ca.pem:
+    file: /home/admin/.config/consolecrypt-docker/secrets/ad-ca.pem
+```
+
+Контейнер должен разрешать DNS-имя контроллера домена; если Docker использует
+другой DNS, добавьте сервису `dns:` или `extra_hosts:`. Проверка пользователя без
+пароля: `cc_compose exec -T server /usr/local/bin/consolecrypt-server admin auth
+test --login alice@acme.com`.
+
+Helm:
+
+```sh
+cc_kubectl create secret generic consolecrypt-ldap \
+  --from-file=bind-password="$CC_INSTALL_DIR/secrets/ldap-bind-password" \
+  --from-file=ca.pem="$CC_INSTALL_DIR/secrets/ad-ca.pem"
+```
+
+```yaml
+auth:
+  mode: enterprise
+  provider: ldap
+  displayName: ACME
+  allowedDomains: [acme.com]
+  ldap:
+    url: ldaps://dc1.acme.local:636
+    bindDn: CN=svc-consolecrypt,OU=Service,DC=acme,DC=local
+    baseDn: DC=acme,DC=local
+    requiredGroup: CN=ConsoleCrypt,OU=Groups,DC=acme,DC=local
+    maxFailures: 3
+    failureWindowMinutes: 30
+    existingSecret: consolecrypt-ldap
+    caKey: ca.pem
+```
+
+### Пример: лимиты запросов из observe в enforce
+
+1. Неделю после обновления до 0.2.2 смотрите метрику
+   `cc_rate_limit_observed_total{limiter}` (порт метрик; в примере Docker он
+   выключен — включите `CC_METRICS_LISTEN` в override-файле и опубликуйте порт
+   только на `127.0.0.1`) или события аудита `limit_exceeded`.
+2. Если обычные пользователи упираются в лимит, поднимите его, например
+   `CC_LIMIT_PUSH_ACCOUNT_RATE=600/min`, или переопределите для одного аккаунта
+   командой `admin limits set`.
+3. Переключите режим.
+
+Docker Compose: в `server.env` — `CC_RATE_LIMIT_MODE=enforce`, поднятые лимиты — в
+`compose.override.yaml`:
+
+```yaml
+services:
+  server:
+    environment:
+      CC_METRICS_LISTEN: 0.0.0.0:9090
+      CC_LIMIT_PUSH_ACCOUNT_RATE: "600/min"
+      CC_LIMIT_PUSH_ACCOUNT_BURST: "600"
+      CC_LIMIT_RECIPIENT_LOOKUP_ACCOUNT_PER_DAY: "100"
+    ports:
+      - "127.0.0.1:9090:9090"
+```
+
+Helm:
+
+```yaml
+config:
+  rateLimit:
+    mode: enforce
+    limits:
+      push_account: {rate: "600/min", burst: 600}
+      recipient_lookup_account: {perDay: 100}
+```
+
+После перезапуска вывод `admin limits show` начинается строкой
+`request limits: enforce` и показывает действующие значения (переопределения
+аккаунта отмечены `*`); отказы считает `cc_rate_limited_total{limiter}`.
+
+### Пример: поднять квоты
+
+Для всего сервера. Docker Compose: `CC_MAX_VAULT_OBJECTS` и
+`CC_MAX_DEVICES_PER_ACCOUNT` — в `server.env`, остальное — в override-файле:
+
+```dotenv
+CC_MAX_VAULT_OBJECTS=200000
+CC_MAX_DEVICES_PER_ACCOUNT=40
+```
+
+```yaml
+services:
+  server:
+    environment:
+      CC_MAX_VAULT_BYTES: "4294967296"
+      CC_MAX_VAULTS_PER_ACCOUNT: "100"
+      CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY: "20"
+```
+
+Helm:
+
+```yaml
+config:
+  quotas:
+    maxVaultBytes: 4294967296
+    maxVaultsPerAccount: 100
+    maxVaultObjects: 200000
+    maxDevicesPerAccount: 40
+    newDevicesPerAccountPerDay: 20
+```
+
+Для одного аккаунта — без перезапуска, не позже чем через 30 секунд:
+
+```sh
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits set \
+  --email user@example.org max_vault_bytes=4294967296 max_vault_objects=200000
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits show --email user@example.org
+```
+
+`CC_MAX_DEVICES_PER_ACCOUNT` не может быть больше 64, `CC_MAX_VAULT_BYTES` — меньше
+1 MiB. Место на диске PostgreSQL планируйте с учётом квоты на хранилище и числа
+аккаунтов.
+
 ## Проверка зависимостей сервера
 
 Для разработчиков и тех, кто собирает образ сам. `server/scripts/dependency_audit.py check`
@@ -1044,3 +1553,427 @@ CI выполняет то же на GitHub-hosted `ubuntu-24.04`: в `validate`
 Исключение добавляется в `ignore` соответствующего `deny.toml` только с
 идентификатором совета, причиной, владельцем и датой пересмотра (не позже трёх
 месяцев).
+
+---
+
+## English
+
+This part covers how to set server parameters with every installation method,
+with worked examples. The installation steps above are in Russian; every key is
+described in English in [CONFIGURATION.md](CONFIGURATION.md#english), and
+enterprise sign-in in [ENTERPRISE.md](ENTERPRISE.md#english).
+
+### Rules for every method
+
+- Parameter names are the same everywhere: the `CC_*` variables of
+  [CONFIGURATION.md](CONFIGURATION.md#english).
+- The process environment wins over the JSON file; an empty variable means "not
+  set" (the default applies).
+- A variable with a typo in its name is silently ignored; an invalid **value**
+  stops the start with `invalid configuration: <KEY>: …`.
+- Changes apply only after a restart (except `admin limits set`).
+- Enterprise secrets are files only (`*_FILE`); database and SMTP passwords go
+  through the environment or a private JSON file. There are no other `*_FILE`
+  variants.
+
+To verify: the `starting` log line shows the effective configuration (passwords
+redacted); `/v1/meta` shows registration, address verification, sign-in mode,
+teams and device protection; `admin limits show` and `admin auth status` show
+limits, quotas and sign-in.
+
+### Docker Compose
+
+Compose passes the server only the `environment:` block of the `server`
+service. `server.env` is interpolated into `compose.yaml` (`--env-file`) but does
+not reach the container itself: `CC_LIMIT_PUSH_ACCOUNT_RATE=600/min` in
+`server.env` changes nothing unless `compose.yaml` uses it.
+
+1. **Keys changed in `server.env`** — written as `${KEY:-value}` in
+   `compose.yaml`: `CC_DATABASE_PASSWORD`, `CC_RUN_MIGRATIONS`,
+   `CC_REGISTRATION_OPEN`, `CC_MAIL_TRANSPORT`, `CC_MAIL_FROM`, `CC_SMTP_HOST`,
+   `CC_SMTP_PORT`, `CC_SMTP_TLS`, `CC_SMTP_USERNAME`, `CC_SMTP_PASSWORD`, the seven
+   sharing flags, `CC_DEVICE_PROTECTION_ENABLED`, `CC_NEW_DEVICE_MAIL_ENABLED`,
+   `CC_DEVICE_QUARANTINE_DAYS`, `CC_TEAMS_ENABLED`, `CC_RATE_LIMIT_MODE`,
+   `CC_QUOTAS_V2_ENABLED`, `CC_MAX_DEVICES_PER_ACCOUNT`, `CC_MAX_VAULT_OBJECTS`,
+   plus Compose's own `CC_SERVER_VERSION`, `CC_SERVER_IMAGE`, `CC_DOMAIN`,
+   `CC_HTTP_PORT`, `CC_POSTGRES_ADMIN_PASSWORD`. Quote values containing `$`, `#`,
+   spaces or quotes with single quotes.
+2. **Every other key goes into a private `compose.override.yaml`** next to
+   `server.env` — keys that `compose.yaml` does not list (`CC_LIMIT_*`,
+   `CC_MAX_VAULT_BYTES`, `CC_MAX_TEAM_MEMBERS`, `CC_AUTH_*`, `CC_OIDC_*`,
+   `CC_LDAP_*`, retention…) and keys it hard-codes (`CC_DATABASE_URL`,
+   `CC_DATABASE_CONNECT_TIMEOUT_SECS`, `CC_LISTEN_ADDR`, `CC_METRICS_LISTEN`,
+   `CC_PUBLIC_URL`, `CC_REQUIRE_EMAIL_VERIFICATION`, `CC_REQUIRE_REQUEST_PROOF`,
+   `CC_TRUST_PROXY_HEADERS`, `CC_EVENT_BUS`, `CC_HSTS`, `CC_LOG_FORMAT`). The
+   override's `environment:` replaces values of the same name. Write values as
+   quoted strings and paths as absolute paths, and include the file with a
+   second `-f` in every command:
+
+   ```sh
+   cc_compose() {
+     docker compose --env-file "$CC_INSTALL_DIR/server.env" \
+       -f "$CC_COMPOSE_FILE" -f "$CC_INSTALL_DIR/compose.override.yaml" \
+       --profile https "$@"
+   }
+   ```
+
+   An `env_file:` entry on the service works too, but `compose.yaml`'s
+   `environment:` wins over `env_file`, so the keys listed above still belong in
+   `environment:`.
+3. **Secret files** (enterprise `*_FILE` keys and CA certificates): non-Swarm
+   Compose mounts `secrets:` as plain files at `/run/secrets/<name>` with the host
+   owner and mode. The image runs as UID 65532, so
+   `sudo chown 65532:65532 "$CC_INSTALL_DIR"/secrets/*` and
+   `sudo chmod 0400 "$CC_INSTALL_DIR"/secrets/*`. A read-only bind mount
+   (`…/secrets:/run/secrets/consolecrypt:ro`) works as well.
+4. **Apply and verify**:
+
+   ```sh
+   cc_compose config --quiet
+   cc_compose up -d --wait --wait-timeout 180 server
+   cc_compose logs --no-log-prefix server | grep '"starting"' | tail -n 1
+   curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
+   cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits show
+   ```
+
+   `up -d` recreates the container only when its configuration changed; volume
+   data is kept. Never use `down -v`.
+
+### Plain `docker run`
+
+Pass keys with `-e KEY=value` or `--env-file`. Note that `docker run --env-file`
+takes values literally and **does not strip quotes**, so the quoted `server.env`
+written by `init-config.py` does not fit it — write unquoted values. Passwords are
+easier to keep in a private JSON file mounted read-only:
+
+```sh
+sudo install -d -m 0750 /etc/consolecrypt
+sudo install -m 0400 -o 65532 -g 65532 server.json /etc/consolecrypt/server.json
+docker run -d --name consolecrypt-server --restart unless-stopped \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 \
+  -v /etc/consolecrypt/server.json:/etc/consolecrypt/server.json:ro \
+  -v /etc/consolecrypt/secrets:/run/secrets/consolecrypt:ro \
+  -e CC_TRUST_PROXY_HEADERS=true \
+  "ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION" \
+  --config /etc/consolecrypt/server.json serve
+```
+
+`CC_SERVER_VERSION` is the server release (as in the Docker Compose example).
+The image already sets `CC_LISTEN_ADDR=0.0.0.0:8080`,
+`CC_METRICS_LISTEN=0.0.0.0:9090`, `CC_LOG_FORMAT=json` and `CC_SOURCE_CODE_URL`;
+container environment wins over the JSON file, so change these four with `-e`.
+To change parameters, `docker rm -f consolecrypt-server` and run the same
+`docker run` again (data lives in PostgreSQL). Admin commands:
+`docker exec consolecrypt-server /usr/local/bin/consolecrypt-server --config
+/etc/consolecrypt/server.json admin …`.
+
+### Kubernetes: Helm
+
+The chart turns values blocks into `CC_*` variables: non-secret ones into a
+ConfigMap, the database URL and SMTP password into a Secret or `secretKeyRef`
+references to yours. The "Helm" column of [CONFIGURATION.md](CONFIGURATION.md#english)
+maps every key. Empty strings are omitted, so the server default applies.
+
+| What | Where in values |
+|---|---|
+| flags, tokens, quotas, limits, WebSocket, maintenance, logging | `config.*` (`config.rateLimit.limits` → `CC_LIMIT_*`) |
+| enterprise sign-in | `auth.*`; secrets `auth.oidc.existingSecret` / `auth.ldap.existingSecret` |
+| mail | `mail.*`; password `mail.smtp.existingSecret` |
+| database | `database.*` or `postgresql.*`; migrations `migrations.*` |
+| metrics | `metrics.enabled` (`CC_METRICS_LISTEN`) |
+| keys without a chart path (`CC_TEAMS_ENABLED`, `CC_MAX_TEAMS_PER_ACCOUNT`, `CC_MAX_TEAM_MEMBERS`, `RUST_LOG`, `OTEL_*`, an external `CC_DATABASE_PASSWORD`) | `extraEnv` |
+
+```yaml
+extraEnv:
+  - name: CC_MAX_TEAM_MEMBERS
+    value: "50"
+  - name: CC_DATABASE_PASSWORD          # external database password apart from the URL
+    valueFrom:
+      secretKeyRef: {name: consolecrypt-database, key: password}
+```
+
+`extraEnv` (the container's `env`) wins over the chart ConfigMap (`envFrom`);
+`extraEnvFrom` is added after the chart ConfigMap and overrides it as well. Use
+this only for keys without their own path, or values and effective settings drift
+apart. Apply with `helm upgrade` and the **complete** private values file — pods
+roll by themselves because the ConfigMap checksum changes; after changing the
+content of an existing Secret, run `kubectl rollout restart
+deployment/consolecrypt`. `kubectl get configmap consolecrypt -o yaml` shows the
+non-secret `CC_*` values as the pod sees them.
+
+### JSON file, binary and systemd
+
+Without containers keep settings in a private JSON file (`--config
+/etc/consolecrypt/server.json` or `CC_CONFIG_FILE`): one JSON object, string values
+only, mode `0600` or `0400`, owned by the service user. An unknown or duplicated
+key, invalid JSON or an unreadable file stops the start without printing the
+content. `CC_LOG`, `RUST_LOG` and `OTEL_*` are not accepted in the file — set them
+in the service environment with a drop-in (`sudo systemctl edit
+consolecrypt-server`, `[Service]` / `Environment=CC_LOG=info,sqlx=warn`). See
+[server.example.json](../../server/deploy/native/server.example.json), the
+[systemd unit](../../server/deploy/native/consolecrypt-server.service) and the
+[native README](../../server/deploy/native/README.md). After editing:
+`sudo systemctl restart consolecrypt-server`, then
+`sudo -u consolecrypt consolecrypt-server --config /etc/consolecrypt/server.json healthcheck`.
+If neither `CC_DATABASE_PASSWORD` nor the URL holds the database password, the
+driver reads the standard `PGPASSWORD` from the service environment.
+
+### Example: shared notes and teams
+
+Shared notes need the main sharing flag; teams are on by default and independent
+of it. Docker Compose, `server.env` (then `cc_compose up -d --wait
+--wait-timeout 180 server`):
+
+```dotenv
+CC_OBJECT_SHARING_ENABLED=true
+CC_SHARED_NOTES_ENABLED=true
+CC_TEAMS_ENABLED=true
+```
+
+Team limits in `compose.override.yaml`:
+
+```yaml
+services:
+  server:
+    environment:
+      CC_MAX_TEAMS_PER_ACCOUNT: "20"
+      CC_MAX_TEAM_MEMBERS: "50"
+```
+
+Helm:
+
+```yaml
+config:
+  requireRequestProof: true
+  objectSharingEnabled: true
+  sharedNotesEnabled: true
+extraEnv:
+  - name: CC_TEAMS_ENABLED
+    value: "true"
+  - name: CC_MAX_TEAM_MEMBERS
+    value: "50"
+```
+
+JSON: `"CC_OBJECT_SHARING_ENABLED": "true", "CC_SHARED_NOTES_ENABLED": "true",
+"CC_MAX_TEAM_MEMBERS": "50"`. Check `capabilities.teams: true` in `/v1/meta`; the
+client sees note support in `/v1/shares/capabilities` (`supports_notes_v1`).
+`CC_TEAMS_ENABLED` accepts only `true` or `false`.
+
+### Example: corporate sign-in with Entra ID
+
+Register the app as described in [ENTERPRISE.md](ENTERPRISE.md#microsoft-entra-id-1)
+with the redirect URI `https://sync.example.org/v1/auth/oidc/callback`.
+
+Docker Compose — secrets:
+
+```sh
+mkdir -p "$CC_INSTALL_DIR/secrets"
+( umask 077
+  openssl rand -hex 32 > "$CC_INSTALL_DIR/secrets/oidc-token-key"
+  read -rs CC_SECRET && printf '%s' "$CC_SECRET" > "$CC_INSTALL_DIR/secrets/oidc-client-secret"
+  unset CC_SECRET )
+sudo chown 65532:65532 "$CC_INSTALL_DIR"/secrets/*
+sudo chmod 0400 "$CC_INSTALL_DIR"/secrets/*
+```
+
+`$CC_INSTALL_DIR/compose.override.yaml` (replace
+`/home/admin/.config/consolecrypt-docker` with your `$CC_INSTALL_DIR`):
+
+```yaml
+services:
+  server:
+    environment:
+      CC_PUBLIC_URL: https://sync.example.org
+      CC_AUTH_MODE: enterprise
+      CC_AUTH_PROVIDER: oidc
+      CC_AUTH_DISPLAY_NAME: Example SSO
+      CC_AUTH_ALLOWED_DOMAINS: example.org
+      CC_OIDC_PRESET: entra
+      CC_OIDC_ISSUER: https://login.microsoftonline.com/<tenant-id>/v2.0
+      CC_OIDC_CLIENT_ID: <application-client-id>
+      CC_OIDC_REQUIRED_CLAIM: roles=ConsoleCrypt.User
+      CC_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
+      CC_OIDC_TOKEN_KEY_FILE: /run/secrets/oidc-token-key
+    secrets: [oidc-client-secret, oidc-token-key]
+secrets:
+  oidc-client-secret:
+    file: /home/admin/.config/consolecrypt-docker/secrets/oidc-client-secret
+  oidc-token-key:
+    file: /home/admin/.config/consolecrypt-docker/secrets/oidc-token-key
+```
+
+Then `cc_compose config --quiet`, `cc_compose up -d --wait --wait-timeout 180
+server` and `cc_compose exec -T server /usr/local/bin/consolecrypt-server admin
+auth test`. The example Caddy serves only the API, so mail links to
+`https://sync.example.org/account` answer 404; the codes in mails work in the app.
+
+Helm:
+
+```sh
+cc_kubectl create secret generic consolecrypt-oidc \
+  --from-file=client-secret="$CC_INSTALL_DIR/secrets/oidc-client-secret" \
+  --from-file=token-key="$CC_INSTALL_DIR/secrets/oidc-token-key"
+```
+
+```yaml
+config:
+  publicUrl: https://sync.example.org
+auth:
+  mode: enterprise
+  provider: oidc
+  displayName: Example SSO
+  allowedDomains: [example.org]
+  oidc:
+    preset: entra
+    issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
+    clientId: <application-client-id>
+    requiredClaim: roles=ConsoleCrypt.User
+    existingSecret: consolecrypt-oidc
+```
+
+JSON or systemd: the same keys as the override file; the `*_FILE` paths point at
+files with mode `0400` owned by the service user.
+
+### Example: Active Directory (LDAP) sign-in
+
+Prepare the service account and certificate as in
+[ENTERPRISE.md](ENTERPRISE.md#active-directory-and-ldap). Docker Compose,
+`compose.override.yaml` (`ldap-bind-password` and `ad-ca.pem` in
+`$CC_INSTALL_DIR/secrets`, owner 65532, mode `0400`):
+
+```yaml
+services:
+  server:
+    environment:
+      CC_AUTH_MODE: enterprise
+      CC_AUTH_PROVIDER: ldap
+      CC_AUTH_DISPLAY_NAME: ACME
+      CC_AUTH_ALLOWED_DOMAINS: acme.com
+      CC_LDAP_URL: ldaps://dc1.acme.local:636
+      CC_LDAP_CA_FILE: /run/secrets/ad-ca.pem
+      CC_LDAP_BIND_DN: CN=svc-consolecrypt,OU=Service,DC=acme,DC=local
+      CC_LDAP_BIND_PASSWORD_FILE: /run/secrets/ldap-bind-password
+      CC_LDAP_BASE_DN: DC=acme,DC=local
+      CC_LDAP_REQUIRED_GROUP: CN=ConsoleCrypt,OU=Groups,DC=acme,DC=local
+      CC_LDAP_MAX_FAILURES: "3"
+      CC_LDAP_FAILURE_WINDOW_MINUTES: "30"
+    secrets: [ldap-bind-password, ad-ca.pem]
+secrets:
+  ldap-bind-password:
+    file: /home/admin/.config/consolecrypt-docker/secrets/ldap-bind-password
+  ad-ca.pem:
+    file: /home/admin/.config/consolecrypt-docker/secrets/ad-ca.pem
+```
+
+The container must resolve the domain controller's DNS name (add `dns:` or
+`extra_hosts:` to the service if Docker uses another resolver). Look a user up
+without a password: `cc_compose exec -T server /usr/local/bin/consolecrypt-server
+admin auth test --login alice@acme.com`.
+
+Helm:
+
+```sh
+cc_kubectl create secret generic consolecrypt-ldap \
+  --from-file=bind-password="$CC_INSTALL_DIR/secrets/ldap-bind-password" \
+  --from-file=ca.pem="$CC_INSTALL_DIR/secrets/ad-ca.pem"
+```
+
+```yaml
+auth:
+  mode: enterprise
+  provider: ldap
+  displayName: ACME
+  allowedDomains: [acme.com]
+  ldap:
+    url: ldaps://dc1.acme.local:636
+    bindDn: CN=svc-consolecrypt,OU=Service,DC=acme,DC=local
+    baseDn: DC=acme,DC=local
+    requiredGroup: CN=ConsoleCrypt,OU=Groups,DC=acme,DC=local
+    maxFailures: 3
+    failureWindowMinutes: 30
+    existingSecret: consolecrypt-ldap
+    caKey: ca.pem
+```
+
+### Example: request limits from observe to enforce
+
+1. For a week after upgrading to 0.2.2 watch `cc_rate_limit_observed_total{limiter}`
+   (the metrics port; the Docker example turns it off — enable `CC_METRICS_LISTEN`
+   in the override and publish the port on `127.0.0.1` only) or the
+   `limit_exceeded` audit events.
+2. If ordinary users hit a limit, raise it (e.g.
+   `CC_LIMIT_PUSH_ACCOUNT_RATE=600/min`) or override it for one account with
+   `admin limits set`.
+3. Switch the mode. Docker Compose: `CC_RATE_LIMIT_MODE=enforce` in `server.env`,
+   raised limits in `compose.override.yaml`:
+
+```yaml
+services:
+  server:
+    environment:
+      CC_METRICS_LISTEN: 0.0.0.0:9090
+      CC_LIMIT_PUSH_ACCOUNT_RATE: "600/min"
+      CC_LIMIT_PUSH_ACCOUNT_BURST: "600"
+      CC_LIMIT_RECIPIENT_LOOKUP_ACCOUNT_PER_DAY: "100"
+    ports:
+      - "127.0.0.1:9090:9090"
+```
+
+Helm:
+
+```yaml
+config:
+  rateLimit:
+    mode: enforce
+    limits:
+      push_account: {rate: "600/min", burst: 600}
+      recipient_lookup_account: {perDay: 100}
+```
+
+After the restart `admin limits show` starts with `request limits: enforce` and
+lists the effective values (account overrides are marked `*`); refusals are
+counted by `cc_rate_limited_total{limiter}`.
+
+### Example: raising quotas
+
+Server-wide. Docker Compose: `CC_MAX_VAULT_OBJECTS` and
+`CC_MAX_DEVICES_PER_ACCOUNT` in `server.env`, the rest in the override:
+
+```dotenv
+CC_MAX_VAULT_OBJECTS=200000
+CC_MAX_DEVICES_PER_ACCOUNT=40
+```
+
+```yaml
+services:
+  server:
+    environment:
+      CC_MAX_VAULT_BYTES: "4294967296"
+      CC_MAX_VAULTS_PER_ACCOUNT: "100"
+      CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY: "20"
+```
+
+Helm:
+
+```yaml
+config:
+  quotas:
+    maxVaultBytes: 4294967296
+    maxVaultsPerAccount: 100
+    maxVaultObjects: 200000
+    maxDevicesPerAccount: 40
+    newDevicesPerAccountPerDay: 20
+```
+
+One account, without a restart (applies within 30 seconds):
+
+```sh
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits set \
+  --email user@example.org max_vault_bytes=4294967296 max_vault_objects=200000
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits show --email user@example.org
+```
+
+`CC_MAX_DEVICES_PER_ACCOUNT` cannot exceed 64 and `CC_MAX_VAULT_BYTES` cannot be
+below 1 MiB. Plan PostgreSQL disk space for the per-vault quota and the number of
+accounts.
