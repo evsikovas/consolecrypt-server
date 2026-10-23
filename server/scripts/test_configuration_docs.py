@@ -6,8 +6,8 @@ The accepted keys come from the code, not from a hand-written list:
 * server/src/config/keys.rs — every key the configuration loader reads from the
   environment or the JSON file (a Rust test keeps it in step with config.rs,
   config/auth.rs and the CC_LIMIT_* catalogue);
-* the environment-only variables read outside the loader (CC_CONFIG_FILE,
-  the CC_LOG/RUST_LOG log filter, the OTEL_* trace endpoints);
+* the environment-only variables (CC_CONFIG_FILE, the legacy DATABASE_URL
+  alias, the CC_LOG/RUST_LOG log filter, the OTEL_* trace endpoints);
 * the Helm chart's _helpers.tpl, whose CC_* → values mapping must match the
   Helm column of the reference.
 """
@@ -33,7 +33,7 @@ DEPLOYMENT_ONLY = {
 # Named on purpose: a placeholder and the *_FILE variants that do NOT exist.
 ILLUSTRATIVE = {"CC_X", "CC_DATABASE_PASSWORD_FILE", "CC_SMTP_PASSWORD_FILE"}
 # A whole token: a key directly followed by "_*" or "_<NAME>" is a pattern.
-TOKEN = re.compile(r"\b(?:CC|OTEL|RUST)_[A-Z0-9_]*[A-Z0-9](?![A-Za-z0-9_<*])")
+TOKEN = re.compile(r"\b(?:CC|OTEL|RUST|DATABASE)_[A-Z0-9_]*[A-Z0-9](?![A-Za-z0-9_<*])")
 
 
 def accepted_keys():
@@ -46,13 +46,13 @@ def accepted_keys():
 def environment_only_keys():
     keys = set()
     file_rs = FILE_RS.read_text()
-    keys.update(re.findall(r'key == "(CC_[A-Z0-9_]+)"', file_rs))
+    keys.update(re.findall(r'key == "([A-Z][A-Z0-9_]*)"', file_rs))
     telemetry = TELEMETRY_RS.read_text()
     keys.update(re.findall(r'try_from_env\("([A-Z0-9_]+)"\)', telemetry))
     keys.update(re.findall(r'"(OTEL_[A-Z0-9_]+)"', telemetry))
     if "try_from_default_env" in telemetry:
         keys.add("RUST_LOG")  # tracing-subscriber's default variable
-    if not {"CC_CONFIG_FILE", "CC_LOG", "RUST_LOG"} <= keys:
+    if not {"CC_CONFIG_FILE", "DATABASE_URL", "CC_LOG", "RUST_LOG"} <= keys:
         raise AssertionError(f"cannot find the environment-only variables: {sorted(keys)}")
     return keys
 
@@ -94,8 +94,7 @@ def sections():
 
 class ConfigurationDocsTest(unittest.TestCase):
     def test_loader_reads_only_accepted_keys(self):
-        # DATABASE_URL is the legacy alias the loader still asks for.
-        unknown = read_keys() - accepted_keys() - environment_only_keys() - {"DATABASE_URL"}
+        unknown = read_keys() - accepted_keys() - environment_only_keys()
         self.assertEqual(unknown, set(), "keys read by config.rs/auth.rs but not in keys.rs")
 
     def test_every_accepted_key_is_documented_in_both_languages(self):

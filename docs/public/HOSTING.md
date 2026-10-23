@@ -1,5 +1,9 @@
 # Установка собственного сервера ConsoleCrypt
 
+> То же самое на сайте: [Docker Compose](https://consolecrypt.dev/guide#server-docker), [Kubernetes](https://consolecrypt.dev/guide#server-setup),
+> [установка и параметры по способам](https://consolecrypt.dev/guide#server-settings).
+> Same on the website: [installation and parameters by method](https://consolecrypt.dev/guide#server-settings).
+
 Сервер хранит учётные записи, сведения об устройствах и зашифрованные данные
 хранилищ. Расшифровка происходит в клиенте; SSH-соединения клиент устанавливает
 непосредственно с вашими хостами.
@@ -1301,7 +1305,6 @@ extraEnv:
 JSON: `"CC_OBJECT_SHARING_ENABLED": "true", "CC_SHARED_NOTES_ENABLED": "true",
 "CC_MAX_TEAM_MEMBERS": "50"`. Проверка: `/v1/meta` → `capabilities.teams: true`;
 поддержку заметок клиент видит в `/v1/shares/capabilities` (`supports_notes_v1`).
-`CC_TEAMS_ENABLED` принимает только `true` или `false`.
 
 ### Пример: корпоративный вход через Entra ID
 
@@ -1758,7 +1761,6 @@ extraEnv:
 JSON: `"CC_OBJECT_SHARING_ENABLED": "true", "CC_SHARED_NOTES_ENABLED": "true",
 "CC_MAX_TEAM_MEMBERS": "50"`. Check `capabilities.teams: true` in `/v1/meta`; the
 client sees note support in `/v1/shares/capabilities` (`supports_notes_v1`).
-`CC_TEAMS_ENABLED` accepts only `true` or `false`.
 
 ### Example: corporate sign-in with Entra ID
 

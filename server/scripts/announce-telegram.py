@@ -42,6 +42,9 @@ TEXT = {
         "setup": "Свой сервер",
         "docker": "Docker Compose",
         "k8s": "Kubernetes",
+        "settings": "Параметры по способам",
+        "reference": "Справочник параметров",
+        "idp": "Корпоративный вход",
         "release": "Релиз и контрольные суммы",
         "notes": "Полный список изменений",
         "guide": "https://consolecrypt.dev/guide",
@@ -52,6 +55,9 @@ TEXT = {
         "setup": "Your own server",
         "docker": "Docker Compose",
         "k8s": "Kubernetes",
+        "settings": "Parameters by method",
+        "reference": "Configuration reference",
+        "idp": "Corporate sign-in",
         "release": "Release and checksums",
         "notes": "Full release notes",
         "guide": "https://consolecrypt.dev/guide",
@@ -97,6 +103,25 @@ def release(tag: str | None) -> dict:
 
 # Relative links in the notes are relative to server/docs/releases/.
 DOCS_BASE = f"https://github.com/{REPO}/blob/main/server/docs/releases/"
+# The self-hosting documents are published as website guide chapters; posts
+# link there instead of to the Markdown sources.
+SITE_GUIDE = "https://consolecrypt.dev/guide"
+SITE_CHAPTERS = {
+    "CONFIGURATION.md": "server-reference",
+    "ENTERPRISE.md": "server-idp",
+    "HOSTING.md": "server-settings",
+}
+
+
+def site_link(url: str) -> str:
+    """GitHub links to docs/public/{CONFIGURATION,ENTERPRISE,HOSTING}.md →
+    the matching website chapter; anything else is returned unchanged."""
+    match = re.match(
+        rf"^https://github\.com/{re.escape(REPO)}/blob/main/docs/public/([A-Z]+\.md)(?:#.*)?$", url
+    )
+    if match and match.group(1) in SITE_CHAPTERS:
+        return f"{SITE_GUIDE}#{SITE_CHAPTERS[match.group(1)]}"
+    return url
 
 
 def notes_body(body: str, lang: str = "ru") -> str:
@@ -132,6 +157,7 @@ def inline(text: str) -> str:
             parts.append(f"<code>{html.escape(code, quote=False)}</code>")
         elif label is not None:
             target = url if re.match(r"^https?://", url) else urllib.parse.urljoin(DOCS_BASE, url)
+            target = site_link(target)
             parts.append(f'<a href="{html.escape(target)}">{inline(label)}</a>')
         elif bold is not None:
             parts.append(f"<b>{inline(bold)}</b>")
@@ -200,7 +226,10 @@ def message(data: dict, lang: str) -> str:
     tail = "\n".join([
         f"<b>{t['image']}</b>: <code>{IMAGE}:{html.escape(version)}</code> (Linux AMD64, ARM64)",
         f"<b>{t['setup']}</b>: <a href=\"{t['guide']}#server-docker\">{t['docker']}</a>"
-        f" · <a href=\"{t['guide']}#server-setup\">{t['k8s']}</a>",
+        f" · <a href=\"{t['guide']}#server-setup\">{t['k8s']}</a>"
+        f" · <a href=\"{t['guide']}#server-settings\">{t['settings']}</a>"
+        f" · <a href=\"{t['guide']}#server-reference\">{t['reference']}</a>"
+        f" · <a href=\"{t['guide']}#server-idp\">{t['idp']}</a>",
         "",
         f'<a href="{release_url}">{t["release"]}</a>',
     ])

@@ -1,5 +1,8 @@
 # Enterprise-режим: вход через IdP (OIDC) или Active Directory (LDAP)
 
+> То же самое на сайте: [корпоративный вход — рецепты](https://consolecrypt.dev/guide#server-idp).
+> Same on the website: [corporate sign-in recipes](https://consolecrypt.dev/guide#server-idp).
+
 Начиная с сервера **0.2.0** (протокол **1.9**) у сервера синхронизации два режима
 входа в аккаунт:
 
