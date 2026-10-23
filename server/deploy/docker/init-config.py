@@ -16,7 +16,7 @@ import warnings
 # Server release of this example (kept on server/Cargo.toml by
 # server/scripts/example_versions.py). The image is
 # ghcr.io/evsikovas/consolecrypt-server:VERSION unless IMAGE is set.
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 IMAGE = None
 
 
