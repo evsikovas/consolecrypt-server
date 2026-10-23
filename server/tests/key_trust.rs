@@ -17,6 +17,7 @@ use cc_protocol::recovery::VaultRecoveryMaterial;
 use cc_protocol::vaults::VaultKeyCommitmentsResponse;
 use cc_protocol::{paths, Bytes, DeviceRequestId, VaultId};
 use common::*;
+use consolecrypt_server::config::{Config, Limit, LimitSpec, RateLimitMode};
 use ed25519_dalek::Signer as _;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -433,4 +434,39 @@ async fn key_commitments_are_signed_per_device_and_listed() {
         list_commitments(&srv, &other, v1.id).await.0,
         StatusCode::NOT_FOUND
     );
+}
+
+#[tokio::test]
+async fn approval_intents_and_commitments_share_the_verification_limit() {
+    let srv = server!(|c: &mut Config| {
+        c.rate_limits.enabled = true;
+        c.rate_limits.mode = RateLimitMode::Enforce;
+        c.rate_limits
+            .limits
+            .set(Limit::VerificationAccount, LimitSpec::per_minute(1));
+    });
+    let a = srv.new_account().await;
+    let v1 = srv.create_vault(&a).await;
+    let b = srv.new_device_session(&a, "B").await;
+    let req = request_trust(&srv, &b, &[v1.id]).await;
+
+    let (status, body) = intent(&srv, &a, &b, req.request_id).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let path = paths::fill(
+        paths::VAULT_KEY_COMMITMENTS,
+        &[("vault_id", &v1.id.to_string())],
+    );
+    let (status, body) = srv
+        .request(
+            reqwest::Method::PUT,
+            &path,
+            Some(&a.access),
+            Some(&commitment_body(&a.device, v1.id, [1; 32], now_unix())),
+        )
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["details"]["limit"], "verification_account");
+    let (status, body) = intent(&srv, &a, &b, req.request_id).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["details"]["limit"], "verification_account");
 }

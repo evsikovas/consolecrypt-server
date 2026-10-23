@@ -9,6 +9,7 @@ use super::{
 };
 use crate::audit::{AuditEvent, AuditType};
 use crate::auth::AuthContext;
+use crate::config::Limit;
 use crate::crypto::{self, TokenKind};
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiJsonOrDefault, ApiPath, ClientIp};
@@ -303,8 +304,12 @@ pub async fn approval_intent(
     if device_id == auth.device_id {
         return Err(AppError::forbidden("a device cannot approve itself"));
     }
-    // TODO(S2 integration): per-account verification limit —
-    // `state.rate.account(&state, Limit::VerificationAccount, auth.user_id).await?;`
+    // Per-account key verification limit (S2): approval intents and
+    // key-commitment records share `verification_account`.
+    state
+        .rate
+        .account(&state, Limit::VerificationAccount, auth.user_id)
+        .await?;
     let mut tx = state.db.begin().await?;
     lock_pending_request(&mut tx, &auth, req.request_id, device_id).await?;
     if !trusted_for_any_requested(&mut tx, &auth, req.request_id).await? {

@@ -7,6 +7,7 @@ use super::access::{require_trusted_with_key, VaultAccess};
 use super::envelopes::{self, Visibility};
 use crate::audit::{AuditEvent, AuditType};
 use crate::auth::AuthContext;
+use crate::config::Limit;
 use crate::crypto;
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiJsonOrDefault, ApiPath, ClientIp};
@@ -432,8 +433,12 @@ pub async fn put_key_commitment(
             "issued_at is outside the allowed clock skew",
         ));
     }
-    // TODO(S2 integration): per-account verification limit —
-    // `state.rate.account(&state, Limit::VerificationAccount, auth.user_id).await?;`
+    // Per-account key verification limit (S2): approval intents and
+    // key-commitment records share `verification_account`.
+    state
+        .rate
+        .account(&state, Limit::VerificationAccount, auth.user_id)
+        .await?;
     let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
     access.require_trusted()?;
     let signing_key: Vec<u8> = sqlx::query_scalar(
