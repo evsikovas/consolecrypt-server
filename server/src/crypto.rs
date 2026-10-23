@@ -53,7 +53,7 @@ pub enum TokenKind {
     Account,
     /// Single-use "This wasn't me" links of security mails (protocol 1.7).
     DenyDevice,
-    /// Single-use OIDC login codes handed to the app (protocol 1.8, 60 s).
+    /// Single-use OIDC login codes handed to the app (protocol 1.9, 60 s).
     LoginCode,
 }
 

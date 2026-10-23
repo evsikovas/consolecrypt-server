@@ -29,7 +29,7 @@ pub struct Inner {
     pub rate: crate::limiter::Limiter,
     pub passwords: PasswordHasher,
     /// Enterprise sign-in provider (`None` in standard mode), validated at
-    /// startup (protocol 1.8).
+    /// startup (protocol 1.9).
     pub enterprise: Option<Arc<crate::enterprise::Enterprise>>,
     /// Last time `devices.last_seen_at` was written per device (throttling).
     device_seen: Mutex<HashMap<DeviceId, Instant>>,

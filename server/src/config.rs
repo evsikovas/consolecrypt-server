@@ -76,7 +76,7 @@ pub struct Config {
     pub device_protection: DeviceProtectionConfig,
     pub mail: MailConfig,
     /// Sign-in mode: standard (account passwords) or enterprise (OIDC/LDAP,
-    /// protocol 1.8).
+    /// protocol 1.9).
     pub auth: AuthConfig,
     /// Byte budget of one `changes`/`snapshot` page.
     pub sync_page_bytes: usize,
@@ -489,7 +489,7 @@ impl Config {
                 "CC_MAX_VAULTS_PER_ACCOUNT",
                 50,
             )?,
-            teams_enabled: parse_or(get("CC_TEAMS_ENABLED"), "CC_TEAMS_ENABLED", true)?,
+            teams_enabled: parse_bool(get("CC_TEAMS_ENABLED"), "CC_TEAMS_ENABLED", true)?,
             max_teams_per_account: parse_or(
                 get("CC_MAX_TEAMS_PER_ACCOUNT"),
                 "CC_MAX_TEAMS_PER_ACCOUNT",

@@ -116,7 +116,7 @@ fn refresh_failure(reason: &'static str) -> AppError {
 /// Rotate a refresh token. Single use: a token presented a second time
 /// revokes its whole session (it leaked) and emits `session_revoked`.
 ///
-/// Enterprise mode (protocol 1.8): when the account's re-check at the
+/// Enterprise mode (protocol 1.9): when the account's re-check at the
 /// IdP/directory is due, the transaction is rolled back, the re-check runs
 /// without holding session locks, and the rotation is retried once.
 pub async fn refresh(

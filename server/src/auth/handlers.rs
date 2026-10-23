@@ -138,7 +138,7 @@ pub async fn register(
 #[derive(sqlx::FromRow)]
 struct LoginUserRow {
     id: Uuid,
-    /// NULL for accounts linked to an enterprise identity (protocol 1.8):
+    /// NULL for accounts linked to an enterprise identity (protocol 1.9):
     /// they never match a password, like an unknown user.
     password_hash: Option<String>,
     status: String,

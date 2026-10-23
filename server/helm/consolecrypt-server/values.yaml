@@ -385,7 +385,7 @@ config:
       # -- Decided/expired device trust requests.
       deviceRequestDays: 90
 
-# Sign-in mode (server 0.2.0, protocol 1.8). `standard` (default): email +
+# Sign-in mode (server 0.2.0, protocol 1.9). `standard` (default): email +
 # account password, as before. `enterprise`: accounts sign in only through
 # the organisation's IdP (OIDC) or Active Directory / LDAP; registration and
 # account passwords are switched off. Vault encryption is unchanged: the IdP,

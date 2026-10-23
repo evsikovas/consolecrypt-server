@@ -77,7 +77,7 @@ pub fn build_router(state: AppState) -> Router {
         .route(paths::RECOVERY_ACCOUNT_START, post(a::recovery_start))
         .route(paths::RECOVERY_ACCOUNT_CONFIRM, post(a::recovery_confirm))
         .route(paths::DEVICES_DENY, post(d::deny_device))
-        // Enterprise sign-in (protocol 1.8).
+        // Enterprise sign-in (protocol 1.9).
         .route(
             paths::AUTH_OIDC_START,
             get(enterprise::handlers::oidc_start),

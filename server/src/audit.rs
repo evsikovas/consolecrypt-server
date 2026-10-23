@@ -50,11 +50,11 @@ pub enum AuditType {
     VaultProofFailed,
     SyncPush,
     AdminAction,
-    /// An account was linked to an IdP/directory identity (protocol 1.8).
+    /// An account was linked to an IdP/directory identity (protocol 1.9).
     IdentityLinked,
     IdentityUnlinked,
     /// The periodic re-check found the user disabled, deleted or outside
-    /// the required group; all sessions were revoked (protocol 1.8).
+    /// the required group; all sessions were revoked (protocol 1.9).
     EnterpriseAccessRevoked,
     ShareCreated,
     ShareAccessRotated,

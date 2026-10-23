@@ -204,7 +204,7 @@ pub fn read_password_stdin() -> anyhow::Result<SecretString> {
 }
 
 // ---------------------------------------------------------------------------
-// Enterprise sign-in (protocol 1.8): emergency access (ТР-2a).
+// Enterprise sign-in (protocol 1.9): emergency access (ТР-2a).
 
 use crate::config::ProviderKind;
 use crate::enterprise;

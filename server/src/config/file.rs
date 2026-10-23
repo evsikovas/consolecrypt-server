@@ -32,7 +32,11 @@ impl ConfigSource {
     pub fn load(path: Option<&Path>) -> Result<Self, ConfigError> {
         // Other environment variables may contain unrelated credentials.
         let environment = std::env::vars()
-            .filter(|(key, _)| keys::KEYS.contains(&key.as_str()) || key == "CC_CONFIG_FILE")
+            .filter(|(key, _)| {
+                keys::KEYS.contains(&key.as_str())
+                    || key == "CC_CONFIG_FILE"
+                    || key == "DATABASE_URL"
+            })
             .collect::<HashMap<_, _>>();
         let path = path.or_else(|| {
             environment
