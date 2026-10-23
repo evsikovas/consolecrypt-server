@@ -34,13 +34,17 @@ def main():
     config = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(config)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", default=config.IMAGE,
-                        help="Exact local/registry image to verify before publishing")
-    parser.add_argument("--server-version", default="0.1.12")
-    parser.add_argument("--source-code-url", default=config.SOURCE)
+    parser.add_argument("--image", default=None,
+                        help="Exact local/registry image to verify before publishing "
+                             "(default: the example's release tag)")
+    parser.add_argument("--server-version", default=config.VERSION)
+    parser.add_argument("--source-code-url", default=None,
+                        help="Source URL the image must report (default: any URL of "
+                             "the official repository)")
     args = parser.parse_args()
     config.IMAGE = args.image
-    config.SOURCE = args.source_code_url
+    expected_image = args.image or f"ghcr.io/evsikovas/consolecrypt-server:{config.VERSION}"
+    official_source = "https://github.com/evsikovas/consolecrypt-server"
     project = "cc-compose-test-" + uuid.uuid4().hex[:12]
     env = {key: value for key, value in os.environ.items() if not key.startswith("CC_")}
     checks = []
@@ -134,7 +138,10 @@ def main():
             assert meta["capabilities"]["auth"] == {"mode": "standard"}
             assert meta["registration_open"] is True
             assert meta["capabilities"]["teams"] is True
-            assert meta["source_code_url"] == config.SOURCE
+            if args.source_code_url:
+                assert meta["source_code_url"] == args.source_code_url
+            else:
+                assert meta["source_code_url"].startswith(official_source)
             assert meta["email_verification_required"] is True
             request(origin, "/v1/auth/me", 401)
             # Enterprise sign-in routes exist but are off in standard mode.
@@ -146,7 +153,9 @@ def main():
             cc("config", "--quiet")
             resolved = json.loads(cc("config", "--format", "json"))
             services = resolved["services"]
-            assert services["server"]["image"] == config.IMAGE
+            assert services["server"]["image"] == expected_image
+            assert "CC_SOURCE_CODE_URL" not in services["server"]["environment"]
+            assert services["server"]["environment"]["CC_RATE_LIMIT_MODE"] == "observe"
             assert not services["postgres"].get("ports")
             assert resolved["networks"]["database"]["internal"] is True
             assert services["server"]["environment"]["CC_PUBLIC_URL"] == ""
@@ -207,6 +216,10 @@ def main():
             sql("CREATE TABLE compose_verification_marker(value text PRIMARY KEY); "
                 f"INSERT INTO compose_verification_marker VALUES ('{marker}');")
             checks.append("nonroot read-only server; database-owner role is not a superuser; migrations 1,2,3,4,6,7,8,9,10,11,12,13")
+            limits = cc("exec", "-T", "server", "/usr/local/bin/consolecrypt-server",
+                        "admin", "limits", "show").decode()
+            assert "push_device" in limits and "observe" in limits
+            checks.append("request limits in observe mode; admin limits CLI reaches the database")
             checks.append("HTTP healthz/readyz/meta/auth; no website; strict proofs and sharing defaults; standard sign-in (protocol 1.9)")
             ca = private / "local-ca.crt"
             cc("cp", "caddy:/data/caddy/pki/authorities/local/root.crt", str(ca))

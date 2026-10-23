@@ -452,31 +452,76 @@ Secret монтируется только для чтения в `/run/secrets/
 
 ### Docker Compose
 
-Основной `compose.yaml` не меняется. Добавьте рядом `compose.override.yaml` со
-своими значениями и секретами:
+Основной `compose.yaml` из исходников не меняется. Настройки и секреты
+enterprise-режима держите в **приватном** каталоге установки рядом с
+`server.env` (`$CC_INSTALL_DIR` из [HOSTING.md](HOSTING.md#docker-compose)), а не в
+клоне репозитория.
 
-```yaml
-services:
-  server:
-    environment:
-      CC_PUBLIC_URL: https://sync.acme.com
-      CC_AUTH_MODE: enterprise
-      CC_AUTH_PROVIDER: oidc
-      CC_AUTH_ALLOWED_DOMAINS: acme.com
-      CC_OIDC_PRESET: keycloak
-      CC_OIDC_ISSUER: https://sso.acme.com/realms/acme
-      CC_OIDC_CLIENT_ID: consolecrypt-server
-      CC_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
-      CC_OIDC_TOKEN_KEY_FILE: /run/secrets/oidc-token-key
-    secrets: [oidc-client-secret, oidc-token-key]
-secrets:
-  oidc-client-secret:
-    file: ./secrets/oidc-client-secret
-  oidc-token-key:
-    file: ./secrets/oidc-token-key
-```
+1. Сохраните секреты OIDC (или пароль служебной учётки LDAP и CA каталога) в
+   `$CC_INSTALL_DIR/secrets/`. Compose без Swarm монтирует их как обычные файлы с
+   владельцем и правами хоста, а сервер работает как UID 65532 — сделайте файлы
+   читаемыми только для него:
 
-Файлы секретов должны быть читаемы пользователем контейнера (UID 65532).
+   ```sh
+   mkdir -p "$CC_INSTALL_DIR/secrets"
+   ( umask 077
+     openssl rand -hex 32 > "$CC_INSTALL_DIR/secrets/oidc-token-key"
+     # client secret из IdP, без перевода строки:
+     read -rs CC_SECRET && printf '%s' "$CC_SECRET" > "$CC_INSTALL_DIR/secrets/oidc-client-secret" )
+   sudo chown 65532:65532 "$CC_INSTALL_DIR"/secrets/*
+   sudo chmod 0400 "$CC_INSTALL_DIR"/secrets/*
+   ```
+
+2. Создайте `$CC_INSTALL_DIR/compose.override.yaml`. Пути указывайте
+   **абсолютными**: относительные Compose отсчитывает от каталога первого
+   файла, то есть от исходников. Замените `/home/admin/.config/consolecrypt-docker`
+   на свой `$CC_INSTALL_DIR`:
+
+   ```yaml
+   services:
+     server:
+       environment:
+         CC_PUBLIC_URL: https://sync.acme.com
+         CC_AUTH_MODE: enterprise
+         CC_AUTH_PROVIDER: oidc
+         CC_AUTH_ALLOWED_DOMAINS: acme.com
+         CC_OIDC_PRESET: keycloak
+         CC_OIDC_ISSUER: https://sso.acme.com/realms/acme
+         CC_OIDC_CLIENT_ID: consolecrypt-server
+         CC_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
+         CC_OIDC_TOKEN_KEY_FILE: /run/secrets/oidc-token-key
+       secrets: [oidc-client-secret, oidc-token-key]
+   secrets:
+     oidc-client-secret:
+       file: /home/admin/.config/consolecrypt-docker/secrets/oidc-client-secret
+     oidc-token-key:
+       file: /home/admin/.config/consolecrypt-docker/secrets/oidc-token-key
+   ```
+
+3. Подключите override-файл. Автоматически Compose подхватывает
+   `compose.override.yaml` только из каталога проекта и только без `-f`; функция
+   `cc_compose` из HOSTING.md передаёт `-f`, поэтому добавьте второй `-f`:
+
+   ```sh
+   cc_compose() {
+     docker compose --env-file "$CC_INSTALL_DIR/server.env" \
+       -f "$CC_COMPOSE_FILE" -f "$CC_INSTALL_DIR/compose.override.yaml" \
+       --profile https "$@"
+   }
+   cc_compose config --quiet
+   cc_compose up -d --wait --wait-timeout 180 server
+   curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
+   ```
+
+   В `/v1/meta` должно появиться `"auth": {"mode": "enterprise", …}`. Проверьте
+   настройку командой `cc_compose exec -T server /usr/local/bin/consolecrypt-server
+   admin auth test`. Для LDAP вместо `CC_OIDC_*` задайте `CC_LDAP_*` и секреты
+   `ldap-bind-password` (`CC_LDAP_BIND_PASSWORD_FILE`) и при необходимости
+   `ldap-ca.pem` (`CC_LDAP_CA_FILE`).
+
+Используйте эту же функцию для всех дальнейших команд (обновление, `admin`,
+резервные копии): без второго `-f` Compose пересоздаст сервер в стандартном
+режиме.
 
 ### Бинарный файл
 

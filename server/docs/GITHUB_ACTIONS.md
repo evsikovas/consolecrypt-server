@@ -59,7 +59,12 @@ ghcr.io/evsikovas/consolecrypt-server:<version>
 ## Порядок выпуска
 
 1. Проверить и включить изменения в `main`, поднять `server/Cargo.toml` и запись
-   самого сервера в `server/Cargo.lock` (пример ниже — `0.1.13`).
+   самого сервера в `server/Cargo.lock` (пример ниже — `0.1.13`) и в том же
+   коммите выполнить `python3 server/scripts/example_versions.py --write`: он
+   переводит примеры самостоятельной установки (`CC_SERVER_VERSION` в Docker
+   Compose, `init-config.py`, `.env.example`, `appVersion` Helm chart и
+   HOSTING.md) на новую версию. Шаг `validate` тегового workflow выполняет
+   `example_versions.py --check` и не соберёт выпуск, если примеры отстают.
 2. **До отправки тега** сделать свежую резервную копию production БД, проверить
    возможность восстановления и совместимость миграций с предыдущим сервером.
    При настроенной production-конфигурации этот же workflow автоматически
@@ -75,8 +80,10 @@ ghcr.io/evsikovas/consolecrypt-server:<version>
 4. Дождаться обеих архитектур, manifest и настроенного deploy, сохранить
    `server-image.json`; проверить `/readyz` и версию/source в `/v1/meta`.
    Если deploy пропущен, публикация образа сама по себе не обновляет сервис.
-5. После выпуска отдельно обновить pinned digest и appVersion в Helm/Compose
-   примерах. До проверки нового образа они сохраняют последний проверенный 0.1.12.
+5. Примеры ссылаются на тег версии (`ghcr.io/evsikovas/consolecrypt-server:X.Y.Z`),
+   который workflow публикует один раз и не перезаписывает; отдельного шага
+   после выпуска нет. Digest для воспроизводимых установок — в `server-image.json`
+   выпуска.
 
 ## Обновление существующего Docker Compose
 
