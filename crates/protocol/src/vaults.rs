@@ -114,6 +114,35 @@ pub struct CreateEnvelopeRequest {
     pub envelope: NewEnvelope,
 }
 
+/// `PUT /v1/vaults/{id}/key-commitments` → `204` (protocol 1.11): a device
+/// trusted for the vault publishes the key commitment it pinned,
+/// `C = HKDF(VRK, vault_id, "cc-vrk-commit-v1")`. `signature` is Ed25519 by
+/// the device's signing key over
+/// [`crate::canonical::vault_key_commitment_message`]; `device_id` must be
+/// the caller and `issued_at` within `limits::MAX_SIGNATURE_SKEW_SECONDS`.
+/// One record per (vault, device); a newer one replaces the older.
+///
+/// Records are not encrypted (`C` reveals nothing) and never confirm a key:
+/// the signing keys come from the server too. Clients only raise an alarm
+/// when a device of their account reports a different `C`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultKeyCommitment {
+    pub device_id: crate::ids::DeviceId,
+    /// 32 bytes.
+    pub commitment: Bytes,
+    /// Unix seconds.
+    pub issued_at: i64,
+    /// 64 bytes.
+    pub signature: Bytes,
+}
+
+/// `GET /v1/vaults/{id}/key-commitments` (protocol 1.11): the records of
+/// the vault's non-revoked devices. Any active device of a member may read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultKeyCommitmentsResponse {
+    pub commitments: Vec<VaultKeyCommitment>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -69,7 +69,10 @@ async fn first_sign_in_creates_the_account_then_repeat_and_second_device() {
         meta["capabilities"]["auth"],
         json!({"mode": "enterprise", "provider": "oidc", "display_name": "Acme SSO"})
     );
-    assert_eq!(meta["protocol_version"], "1.11");
+    assert_eq!(
+        meta["protocol_version"],
+        cc_protocol::PROTOCOL_VERSION.to_string()
+    );
     assert_eq!(meta["registration_open"], false);
 
     let user = MockUser::new(&acme_email());

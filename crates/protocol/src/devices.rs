@@ -205,6 +205,76 @@ pub struct DeviceTrustRequest {
     pub expires_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_by_device_id: Option<DeviceId>,
+    /// The trusted device that announced it is approving this request
+    /// ([`ApprovalIntentRequest`], protocol 1.11), with the public keys the
+    /// server holds for it. The new device derives the pairing code v2 from
+    /// them and pins the approver's signing key once the user confirmed the
+    /// codes match on both screens. Absent before an intent and on older
+    /// servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approver: Option<DeviceApprover>,
+}
+
+/// The approving device as announced by [`ApprovalIntentRequest`]
+/// (protocol 1.11). Server data: trusted only after the pairing code v2
+/// matched on both screens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceApprover {
+    pub device_id: DeviceId,
+    pub name: String,
+    pub platform: Platform,
+    pub encryption_public_key: Bytes,
+    pub signing_public_key: Bytes,
+    pub announced_at: Timestamp,
+}
+
+/// `POST /v1/devices/{new_device_id}/approval-intent` → `204` (protocol
+/// 1.11). A device trusted for at least one requested vault announces that
+/// it is about to approve the request: the server records it as the
+/// request's [`DeviceTrustRequest::approver`] (a later intent replaces an
+/// earlier one) and emits `device_approval_intent` to the account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalIntentRequest {
+    pub request_id: DeviceRequestId,
+}
+
+/// One vault of a v2 approval (protocol 1.11): its key commitment and the
+/// SHA-256 of the device envelope sealed for the new device
+/// ([`crate::canonical::device_envelope_hash_input`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalVaultCommitment {
+    pub vault_id: VaultId,
+    /// 32 bytes.
+    pub commitment: Bytes,
+    /// 32 bytes.
+    pub envelope_sha256: Bytes,
+}
+
+/// Approval v2 (protocol 1.11), sent next to the v1 signature.
+/// `signature_v2` is Ed25519 by the approver's signing key over
+/// [`crate::canonical::device_approval_message_v2`] with the same
+/// `request_id` and `issued_at` as the v1 signature and exactly one entry per
+/// envelope. The server verifies both signatures, checks every
+/// `envelope_sha256` against the envelope in the request and keeps the v2
+/// approval for the new device ([`DeviceApprovalRecord`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalV2 {
+    pub vault_commitments: Vec<ApprovalVaultCommitment>,
+    pub signature_v2: Bytes,
+}
+
+/// A stored v2 approval as handed to the approved device in
+/// [`crate::recovery::VaultRecoveryMaterial::device_approval`] (protocol
+/// 1.11). The new device verifies `signature_v2` with the approver key it
+/// pinned, the envelope hash and `HKDF(VRK)` against the commitment, and
+/// takes the vault id only from `vault_commitments`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceApprovalRecord {
+    pub request_id: DeviceRequestId,
+    pub approver_device_id: DeviceId,
+    pub issued_at: i64,
+    pub vault_commitments: Vec<ApprovalVaultCommitment>,
+    pub signature_v2: Bytes,
 }
 
 /// `POST /v1/devices/{new_device_id}/approve` — called by a device trusted
@@ -224,6 +294,9 @@ pub struct ApproveDeviceRequest {
     pub signature: Bytes,
     /// One `device` envelope (recipient = new device) per approved vault.
     pub envelopes: Vec<VaultEnvelope>,
+    /// Approval v2 (protocol 1.11), omitted by older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v2: Option<ApprovalV2>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +373,36 @@ pub struct UpdateDeviceRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_v2_is_optional_on_the_wire() {
+        // A 1.10 client's approval decodes without `v2`, and a request
+        // without `v2` serializes exactly as before.
+        let v = serde_json::json!({
+            "request_id": DeviceRequestId::new().to_string(),
+            "issued_at": 1,
+            "signature": "AAAA",
+            "envelopes": []
+        });
+        let req: ApproveDeviceRequest = serde_json::from_value(v).unwrap();
+        assert!(req.v2.is_none());
+        assert!(serde_json::to_value(&req).unwrap().get("v2").is_none());
+
+        let rec = DeviceApprovalRecord {
+            request_id: DeviceRequestId::new(),
+            approver_device_id: DeviceId::new(),
+            issued_at: 7,
+            vault_commitments: vec![ApprovalVaultCommitment {
+                vault_id: VaultId::new(),
+                commitment: Bytes::new(vec![1; 32]),
+                envelope_sha256: Bytes::new(vec![2; 32]),
+            }],
+            signature_v2: Bytes::new(vec![3; 64]),
+        };
+        let back: DeviceApprovalRecord =
+            serde_json::from_value(serde_json::to_value(&rec).unwrap()).unwrap();
+        assert_eq!(back, rec);
+    }
 
     #[test]
     fn request_proof_header_roundtrip() {

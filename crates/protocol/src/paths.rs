@@ -26,6 +26,8 @@ pub const DEVICE_APPROVE: &str = "/v1/devices/{device_id}/approve";
 pub const DEVICE_REJECT: &str = "/v1/devices/{device_id}/reject";
 pub const DEVICE_ATTEST: &str = "/v1/devices/{device_id}/attest";
 pub const DEVICE_REVOKE: &str = "/v1/devices/{device_id}/revoke";
+/// The approving device announces itself (protocol 1.11).
+pub const DEVICE_APPROVAL_INTENT: &str = "/v1/devices/{device_id}/approval-intent";
 /// Unauthenticated "This wasn't me" link from a security mail (protocol 1.7).
 pub const DEVICES_DENY: &str = "/v1/devices/deny";
 
@@ -33,6 +35,8 @@ pub const VAULTS: &str = "/v1/vaults";
 pub const VAULT: &str = "/v1/vaults/{vault_id}";
 pub const VAULT_ENVELOPES: &str = "/v1/vaults/{vault_id}/envelopes";
 pub const VAULT_ENVELOPE: &str = "/v1/vaults/{vault_id}/envelopes/{envelope_id}";
+/// Signed key-commitment records (protocol 1.11).
+pub const VAULT_KEY_COMMITMENTS: &str = "/v1/vaults/{vault_id}/key-commitments";
 
 // teams (protocol 1.10)
 pub const TEAMS: &str = "/v1/teams";

@@ -36,6 +36,10 @@ pub enum AuditType {
     DeviceRenamed,
     DeviceDenied,
     DeviceQuarantineLifted,
+    /// A trusted device announced it is approving a request (protocol 1.11).
+    DeviceApprovalIntent,
+    /// A device published its vault key commitment (protocol 1.11).
+    VaultKeyCommitment,
     EnvelopeIssued,
     EnvelopeRateLimited,
     VaultCreated,
@@ -103,6 +107,8 @@ impl AuditType {
             AuditType::DeviceRenamed => "device_renamed",
             AuditType::DeviceDenied => "device_denied",
             AuditType::DeviceQuarantineLifted => "device_quarantine_lifted",
+            AuditType::DeviceApprovalIntent => "device_approval_intent",
+            AuditType::VaultKeyCommitment => "vault_key_commitment",
             AuditType::EnvelopeIssued => "envelope_issued_untrusted",
             AuditType::EnvelopeRateLimited => "envelope_rate_limited",
             AuditType::VaultCreated => "vault_created",

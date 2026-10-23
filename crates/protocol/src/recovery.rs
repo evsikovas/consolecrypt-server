@@ -11,6 +11,7 @@
 //! * lost everything → account recovery + create a new, empty vault.
 
 use crate::bytes::Bytes;
+use crate::devices::DeviceApprovalRecord;
 use crate::envelopes::{KeyEnvelope, NewEnvelope};
 use crate::ids::VaultId;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,12 @@ pub struct VaultRecoveryMaterial {
     /// The calling device's own envelope, if it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_envelope: Option<KeyEnvelope>,
+    /// The v2 approval that sealed `device_envelope` for the calling device
+    /// and covers this vault (protocol 1.11). Absent on older servers, when
+    /// the approver sent no v2 approval, or for envelopes not from an
+    /// approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_approval: Option<DeviceApprovalRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

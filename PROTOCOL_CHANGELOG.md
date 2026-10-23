@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-- Protocol 1.11 (server 0.2.2, additive): **quotas and request limits**
-  (security audit S2). No new types or error codes; `cc_protocol::quotas`
-  names the `details` values.
+- Protocol 1.11 (2026-10-23, server 0.2.2, additive): **quotas and request
+  limits** (security audit S2) and **vault key trust** (security audit
+  2026-10-21, finding H2).
+
+  Quotas and request limits: no new types or error codes;
+  `cc_protocol::quotas` names the `details` values.
   - `429 rate_limited` now also carries `details.limit` naming the limit
     (`cc_protocol::quotas::limit`: `push_device`, `push_account`,
     `mutations_account`, `unknown_delete_account`, `share_write_account`,
@@ -37,6 +40,56 @@
     the e-mail limits. Account recovery requests are limited per e-mail and
     network; the answer stays `202`.
   - Migration `0013_quotas_limits`.
+
+  Vault key trust, advertised as `capabilities.vrk_commitment` in `/v1/meta`
+  (always on). Older clients keep using v1 approvals unchanged; newer clients
+  against older servers pin the vault key on first use and confirm it with
+  the next passphrase or Recovery Key unlock.
+  - Key commitment `C = HKDF-SHA256(ikm = VRK, salt = vault_id, info =
+    "cc-vrk-commit-v1")`, 32 bytes, not secret (`canonical::labels::
+    VRK_COMMITMENT`). Clients pin it locally and check every VRK they obtain
+    against it.
+  - Approval intent: `POST /v1/devices/{new_device_id}/approval-intent`
+    `ApprovalIntentRequest { request_id }` → `204`, by a device trusted for
+    at least one requested vault (`403 device_not_trusted` otherwise; a later
+    intent replaces an earlier one). `DeviceTrustRequest.approver:
+    DeviceApprover { device_id, name, platform, encryption_public_key,
+    signing_public_key, announced_at }` (omitted when absent). Event
+    `device_approval_intent { request_id, device_id, approver_device_id }`.
+  - Mutual pairing code v2: `SHA-256(canonical::device_pairing_code_v2_input
+    (request_id, new device id + keys, approver id + keys))`, rendered as 6
+    groups of 5 digits like the device code. Both devices show it.
+  - Approval v2: `ApproveDeviceRequest.v2: ApprovalV2 { vault_commitments:
+    [ApprovalVaultCommitment { vault_id, commitment, envelope_sha256 }],
+    signature_v2 }` (omitted by older clients). `signature_v2` is Ed25519 by
+    the approver over `canonical::device_approval_message_v2` (label
+    `consolecrypt/v2/device-approval\0`; request id, approver id + keys, new
+    device id + keys, `issued_at`, then per vault sorted by id `vault_id ‖ C ‖
+    SHA-256(ephemeral_pub ‖ nonce ‖ ciphertext)` of its envelope,
+    `canonical::device_envelope_hash_input`). The server verifies both
+    signatures, requires exactly one entry per envelope with matching
+    envelope hashes (`400`; bad signature `422 invalid_proof`) and keeps the
+    v2 approval for the new device.
+  - `VaultRecoveryMaterial.device_approval: DeviceApprovalRecord {
+    request_id, approver_device_id, issued_at, vault_commitments,
+    signature_v2 }` — only for the approved device and only next to its
+    device envelope. The new device verifies it with the approver key it
+    pinned after comparing the pairing code, checks the envelope hash and
+    `HKDF(VRK)` against `C` and takes the vault id only from the signed list.
+  - Key-commitment records: `PUT /v1/vaults/{id}/key-commitments`
+    `VaultKeyCommitment { device_id, commitment, issued_at, signature }` →
+    `204` (trusted device, own `device_id`, Ed25519 over
+    `canonical::vault_key_commitment_message`, label
+    `consolecrypt/vault/key-commitment/v1\0`, `issued_at` within
+    `MAX_SIGNATURE_SKEW_SECONDS`; one record per vault and device, an older
+    one never replaces a newer one). `GET` → `VaultKeyCommitmentsResponse`
+    for any active device of a member (records of revoked devices omitted).
+    Records only raise an alarm on clients; they never confirm a key.
+  - Migration `0014_vault_key_trust`.
+  - Not in this version (planned): the sharing verification session relay
+    (`POST /v1/shares/verifications`, `capabilities.sharing_verification`).
+    Sharing key verification (QR code and long safety code) is computed on
+    the clients and needs no server change.
 
 - Protocol 1.10 (2026-10-22, server 0.2.1, additive): **teams**, advertised as
   `capabilities.teams` in `/v1/meta` (`CC_TEAMS_ENABLED`, default on).

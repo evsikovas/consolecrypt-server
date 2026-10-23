@@ -396,3 +396,116 @@ pub async fn delete_envelope(
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(sqlx::FromRow)]
+struct CommitmentRow {
+    device_id: Uuid,
+    commitment: Vec<u8>,
+    issued_at: i64,
+    signature: Vec<u8>,
+}
+
+/// `PUT /v1/vaults/{vault_id}/key-commitments` → `204` (protocol 1.11). A
+/// device trusted for the vault publishes the key commitment it pinned,
+/// signed with its own device key. One record per (vault, device). The
+/// server only checks the signature against the registered key; the
+/// commitment itself is opaque to it.
+pub async fn put_key_commitment(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    ClientIp(ip): ClientIp,
+    ApiPath(vault_id): ApiPath<VaultId>,
+    ApiJson(req): ApiJson<cc_protocol::vaults::VaultKeyCommitment>,
+) -> AppResult<StatusCode> {
+    if req.device_id != auth.device_id {
+        return Err(AppError::forbidden(
+            "a device can only publish its own key commitment",
+        ));
+    }
+    let commitment = <[u8; 32]>::try_from(req.commitment.as_slice())
+        .map_err(|_| AppError::bad_request("commitment must be 32 bytes"))?;
+    if req.signature.len() != limits::ED25519_SIGNATURE_LEN {
+        return Err(AppError::bad_request("invalid signature"));
+    }
+    if Utc::now().timestamp().abs_diff(req.issued_at) > limits::MAX_SIGNATURE_SKEW_SECONDS as u64 {
+        return Err(AppError::invalid_proof(
+            "issued_at is outside the allowed clock skew",
+        ));
+    }
+    // TODO(S2 integration): per-account verification limit —
+    // `state.rate.account(&state, Limit::VerificationAccount, auth.user_id).await?;`
+    let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
+    access.require_trusted()?;
+    let signing_key: Vec<u8> = sqlx::query_scalar(
+        "SELECT signing_public_key FROM devices WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(Uuid::from(auth.device_id))
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(AppError::unauthorized)?;
+    let message = cc_protocol::canonical::vault_key_commitment_message(
+        vault_id,
+        &commitment,
+        auth.device_id,
+        req.issued_at,
+    );
+    if !crypto::verify_ed25519(&signing_key, &message, req.signature.as_slice()) {
+        return Err(AppError::invalid_proof("invalid key commitment signature"));
+    }
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "INSERT INTO vault_key_commitments (vault_id, device_id, commitment, issued_at, signature)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (vault_id, device_id) DO UPDATE
+            SET commitment = EXCLUDED.commitment, issued_at = EXCLUDED.issued_at,
+                signature = EXCLUDED.signature, updated_at = now()
+          WHERE vault_key_commitments.issued_at <= EXCLUDED.issued_at",
+    )
+    .bind(Uuid::from(vault_id))
+    .bind(Uuid::from(auth.device_id))
+    .bind(&commitment[..])
+    .bind(req.issued_at)
+    .bind(req.signature.as_slice())
+    .execute(&mut *tx)
+    .await?;
+    AuditEvent::new(AuditType::VaultKeyCommitment)
+        .user(auth.user_id)
+        .device(auth.device_id)
+        .target(vault_id)
+        .ip(ip)
+        .record(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /v1/vaults/{vault_id}/key-commitments` (protocol 1.11): the records
+/// of the vault's non-revoked devices; any active device of a member.
+pub async fn list_key_commitments(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    ApiPath(vault_id): ApiPath<VaultId>,
+) -> AppResult<Json<cc_protocol::vaults::VaultKeyCommitmentsResponse>> {
+    VaultAccess::load(&state.db, &auth, vault_id).await?;
+    let rows: Vec<CommitmentRow> = sqlx::query_as(
+        "SELECT c.device_id, c.commitment, c.issued_at, c.signature
+           FROM vault_key_commitments c
+           JOIN devices d ON d.id = c.device_id AND d.revoked_at IS NULL
+          WHERE c.vault_id = $1
+          ORDER BY c.device_id",
+    )
+    .bind(Uuid::from(vault_id))
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(cc_protocol::vaults::VaultKeyCommitmentsResponse {
+        commitments: rows
+            .into_iter()
+            .map(|r| cc_protocol::vaults::VaultKeyCommitment {
+                device_id: r.device_id.into(),
+                commitment: r.commitment.into(),
+                issued_at: r.issued_at,
+                signature: r.signature.into(),
+            })
+            .collect(),
+    }))
+}

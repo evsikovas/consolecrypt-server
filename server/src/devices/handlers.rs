@@ -20,11 +20,15 @@ use crate::vaults::envelopes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
-use cc_protocol::canonical::device_approval_message;
+use cc_protocol::canonical::{
+    device_approval_message, device_approval_message_v2, device_envelope_hash_input,
+    ApprovedVaultKey,
+};
 use cc_protocol::devices::{
-    ApproveDeviceRequest, AttestDeviceRequest, CreateDeviceTrustRequest, DenyDeviceRequest,
-    DenyDeviceResponse, DeviceInfo, DeviceRequestStatus, DeviceTrustRequest, ListDevicesResponse,
-    RejectDeviceRequest, RevokeDeviceRequest, UpdateDeviceRequest,
+    ApprovalIntentRequest, ApprovalV2, ApproveDeviceRequest, AttestDeviceRequest,
+    CreateDeviceTrustRequest, DenyDeviceRequest, DenyDeviceResponse, DeviceInfo,
+    DeviceRequestStatus, DeviceTrustRequest, ListDevicesResponse, RejectDeviceRequest,
+    RevokeDeviceRequest, UpdateDeviceRequest, VaultEnvelope,
 };
 use cc_protocol::envelopes::{KeyEnvelope, RecipientType};
 use cc_protocol::events::ServerEvent;
@@ -262,6 +266,139 @@ async fn lock_pending_request(
     Ok(())
 }
 
+/// Whether the caller is trusted for at least one vault of the request.
+async fn trusted_for_any_requested(
+    conn: &mut sqlx::PgConnection,
+    auth: &AuthContext,
+    request_id: DeviceRequestId,
+) -> AppResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM device_request_vaults rv
+              JOIN vaults v ON v.id = rv.vault_id AND v.state = 'active'
+              JOIN vault_members m ON m.vault_id = v.id AND m.user_id = $2 AND m.revoked_at IS NULL
+              JOIN vault_key_envelopes e ON e.vault_id = v.id AND e.recipient_type = 'device'
+                                        AND e.recipient_id = $3 AND e.revoked_at IS NULL
+             WHERE rv.request_id = $1)",
+    )
+    .bind(Uuid::from(request_id))
+    .bind(Uuid::from(auth.user_id))
+    .bind(Uuid::from(auth.device_id))
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
+/// `POST /v1/devices/{device_id}/approval-intent` → `204` (protocol 1.11).
+/// A device trusted for at least one requested vault announces that it is
+/// approving the pending request; the new device then shows the pairing
+/// code v2 derived from both devices' keys. A later intent replaces an
+/// earlier one. Emits `device_approval_intent`.
+pub async fn approval_intent(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    ClientIp(ip): ClientIp,
+    ApiPath(device_id): ApiPath<DeviceId>,
+    ApiJson(req): ApiJson<ApprovalIntentRequest>,
+) -> AppResult<StatusCode> {
+    if device_id == auth.device_id {
+        return Err(AppError::forbidden("a device cannot approve itself"));
+    }
+    // TODO(S2 integration): per-account verification limit —
+    // `state.rate.account(&state, Limit::VerificationAccount, auth.user_id).await?;`
+    let mut tx = state.db.begin().await?;
+    lock_pending_request(&mut tx, &auth, req.request_id, device_id).await?;
+    if !trusted_for_any_requested(&mut tx, &auth, req.request_id).await? {
+        return Err(AppError::device_not_trusted());
+    }
+    sqlx::query(
+        "UPDATE device_requests SET intent_device_id = $2, intent_at = now() WHERE id = $1",
+    )
+    .bind(Uuid::from(req.request_id))
+    .bind(Uuid::from(auth.device_id))
+    .execute(&mut *tx)
+    .await?;
+    AuditEvent::new(AuditType::DeviceApprovalIntent)
+        .user(auth.user_id)
+        .device(auth.device_id)
+        .target(device_id)
+        .ip(ip)
+        .meta(serde_json::json!({ "request_id": req.request_id }))
+        .record(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    state
+        .events
+        .publish_user(
+            auth.user_id,
+            ServerEvent::DeviceApprovalIntent {
+                request_id: req.request_id,
+                device_id,
+                approver_device_id: auth.device_id,
+            },
+        )
+        .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn key32(b: &cc_protocol::Bytes, what: &'static str) -> AppResult<[u8; 32]> {
+    <[u8; 32]>::try_from(b.as_slice()).map_err(|_| AppError::bad_request(what))
+}
+
+/// Structural checks of an approval v2 against the envelopes of the same
+/// request (protocol 1.11): exactly one commitment per envelope, the
+/// envelope hashes match. Returns the signed per-vault entries.
+fn approval_v2_entries(
+    v2: &ApprovalV2,
+    envelopes: &[VaultEnvelope],
+) -> AppResult<Vec<ApprovedVaultKey>> {
+    if v2.vault_commitments.len() != envelopes.len() {
+        return Err(AppError::bad_request(
+            "approval v2 must cover exactly the approved vaults",
+        ));
+    }
+    if v2.signature_v2.len() != cc_protocol::limits::ED25519_SIGNATURE_LEN {
+        return Err(AppError::bad_request("invalid signature_v2"));
+    }
+    let mut out = Vec::with_capacity(envelopes.len());
+    for c in &v2.vault_commitments {
+        let env = envelopes
+            .iter()
+            .find(|e| e.vault_id == c.vault_id)
+            .ok_or_else(|| {
+                AppError::bad_request("approval v2 names a vault without an envelope")
+            })?;
+        if out
+            .iter()
+            .any(|k: &ApprovedVaultKey| k.vault_id == c.vault_id)
+        {
+            return Err(AppError::bad_request("duplicate vault in approval v2"));
+        }
+        let eph = env
+            .envelope
+            .metadata
+            .ephemeral_public_key
+            .as_ref()
+            .ok_or_else(|| AppError::bad_request("device envelope without ephemeral key"))?;
+        let actual = crypto::sha256(&device_envelope_hash_input(
+            eph.as_slice(),
+            env.envelope.nonce.as_slice(),
+            env.envelope.ciphertext.as_slice(),
+        ));
+        let claimed = key32(&c.envelope_sha256, "invalid envelope_sha256")?;
+        if actual != claimed {
+            return Err(AppError::bad_request(
+                "envelope_sha256 does not match the envelope",
+            ));
+        }
+        out.push(ApprovedVaultKey {
+            vault_id: c.vault_id,
+            commitment: key32(&c.commitment, "invalid commitment")?,
+            envelope_sha256: claimed,
+        });
+    }
+    Ok(out)
+}
+
 /// `POST /v1/devices/{device_id}/approve` → `DeviceTrustRequest`.
 ///
 /// Requires: the caller is trusted for every vault in `envelopes`, those
@@ -305,6 +442,11 @@ pub async fn approve_device(
             "approval issued_at is outside the allowed clock skew",
         ));
     }
+    let v2_entries = req
+        .v2
+        .as_ref()
+        .map(|v2| approval_v2_entries(v2, &req.envelopes))
+        .transpose()?;
 
     let mut tx = state.db.begin().await?;
     lock_pending_request(&mut tx, &auth, req.request_id, device_id).await?;
@@ -350,11 +492,40 @@ pub async fn approve_device(
         req.issued_at,
         &vault_ids,
     );
-    if !crypto::verify_ed25519(
-        &approver.signing_public_key,
-        &message,
-        req.signature.as_slice(),
-    ) {
+    let v2_valid = match (&v2_entries, &req.v2) {
+        (Some(entries), Some(v2)) => {
+            let (Ok(a_enc), Ok(a_sig)) = (
+                <[u8; 32]>::try_from(approver.encryption_public_key.as_slice()),
+                <[u8; 32]>::try_from(approver.signing_public_key.as_slice()),
+            ) else {
+                return Err(AppError::internal("stored device key has wrong length"));
+            };
+            let message_v2 = device_approval_message_v2(
+                req.request_id,
+                auth.device_id,
+                &a_enc,
+                &a_sig,
+                device_id,
+                &enc,
+                &sig,
+                req.issued_at,
+                entries,
+            );
+            crypto::verify_ed25519(
+                &approver.signing_public_key,
+                &message_v2,
+                v2.signature_v2.as_slice(),
+            )
+        }
+        _ => true,
+    };
+    if !v2_valid
+        || !crypto::verify_ed25519(
+            &approver.signing_public_key,
+            &message,
+            req.signature.as_slice(),
+        )
+    {
         drop(tx);
         metrics::counter!("cc_device_approvals_total", "result" => "bad_signature").increment(1);
         AuditEvent::new(AuditType::DeviceApprovalFailed)
@@ -375,6 +546,22 @@ pub async fn approve_device(
             auth.device_id,
             "replaced",
         )
+        .await?;
+    }
+    if let Some(v2) = &req.v2 {
+        // Kept exactly as signed for the approved device (protocol 1.11).
+        sqlx::query(
+            "INSERT INTO device_approvals_v2
+                 (request_id, device_id, approver_device_id, issued_at, vault_commitments, signature)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(Uuid::from(req.request_id))
+        .bind(Uuid::from(device_id))
+        .bind(Uuid::from(auth.device_id))
+        .bind(req.issued_at)
+        .bind(sqlx::types::Json(&v2.vault_commitments))
+        .bind(v2.signature_v2.as_slice())
+        .execute(&mut *tx)
         .await?;
     }
     // TR-8: approval by a trusted device that is itself past quarantine
@@ -417,7 +604,11 @@ pub async fn approve_device(
         .device(auth.device_id)
         .target(device_id)
         .ip(ip)
-        .meta(serde_json::json!({ "request_id": req.request_id, "vaults": vault_ids }))
+        .meta(serde_json::json!({
+            "request_id": req.request_id,
+            "vaults": vault_ids,
+            "v2": req.v2.is_some(),
+        }))
         .record(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -456,21 +647,7 @@ pub async fn reject_device(
 ) -> AppResult<StatusCode> {
     let mut tx = state.db.begin().await?;
     lock_pending_request(&mut tx, &auth, req.request_id, device_id).await?;
-    let trusted_any: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1 FROM device_request_vaults rv
-              JOIN vaults v ON v.id = rv.vault_id AND v.state = 'active'
-              JOIN vault_members m ON m.vault_id = v.id AND m.user_id = $2 AND m.revoked_at IS NULL
-              JOIN vault_key_envelopes e ON e.vault_id = v.id AND e.recipient_type = 'device'
-                                        AND e.recipient_id = $3 AND e.revoked_at IS NULL
-             WHERE rv.request_id = $1)",
-    )
-    .bind(Uuid::from(req.request_id))
-    .bind(Uuid::from(auth.user_id))
-    .bind(Uuid::from(auth.device_id))
-    .fetch_one(&mut *tx)
-    .await?;
-    if !trusted_any {
+    if !trusted_for_any_requested(&mut tx, &auth, req.request_id).await? {
         return Err(AppError::device_not_trusted());
     }
     sqlx::query("UPDATE device_requests SET status = 'rejected', decided_at = now() WHERE id = $1")

@@ -34,6 +34,7 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
             recipient_lookup_post: sharing,
             auth: auth_capability(&state.config.auth),
             teams: state.config.teams_enabled,
+            vrk_commitment: true,
         },
     }
 }

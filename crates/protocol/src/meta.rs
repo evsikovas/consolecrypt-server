@@ -63,6 +63,13 @@ pub struct ServerCapabilities {
     /// Teams (protocol 1.10): `/v1/teams/*`, team vaults and their events.
     #[serde(default)]
     pub teams: bool,
+    /// Vault key commitments (protocol 1.11, audit H2): approval intents and
+    /// `DeviceTrustRequest.approver`, approval v2 (`ApproveDeviceRequest.v2`,
+    /// `VaultRecoveryMaterial.device_approval`) and
+    /// `PUT|GET /v1/vaults/{id}/key-commitments`. Without it clients pin the
+    /// key on first use and confirm it with the next passphrase unlock.
+    #[serde(default)]
+    pub vrk_commitment: bool,
 }
 
 /// `capabilities.auth` (protocol 1.9): the sign-in method of this server.
@@ -162,6 +169,20 @@ mod tests {
         assert!(info.capabilities.share_restore);
         assert!(!info.capabilities.device_protection);
         assert!(!info.capabilities.recipient_lookup_post);
+    }
+
+    #[test]
+    fn vrk_commitment_capability_1_11() {
+        let v = serde_json::json!({
+            "server_version": "0.2.2",
+            "protocol_version": "1.11",
+            "minimum_supported_protocol": "1.0",
+            "capabilities": { "vrk_commitment": true }
+        });
+        let info: ServerInfo = serde_json::from_value(v).unwrap();
+        assert!(info.capabilities.vrk_commitment);
+        let old: ServerCapabilities = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!old.vrk_commitment);
     }
 
     #[test]

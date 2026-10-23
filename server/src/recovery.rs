@@ -17,6 +17,7 @@ use crate::vaults::envelopes;
 use crate::vaults::VaultAccess;
 use axum::extract::State;
 use axum::Json;
+use cc_protocol::devices::{ApprovalVaultCommitment, DeviceApprovalRecord};
 use cc_protocol::envelopes::{KeyEnvelope, RecipientType};
 use cc_protocol::events::ServerEvent;
 use cc_protocol::recovery::{RecoveryMaterialQuery, ReplaceEnvelopeRequest, VaultRecoveryMaterial};
@@ -54,12 +55,55 @@ pub async fn vault_material(
         )
         .await?;
     }
+    let device_approval = match &device_envelope {
+        Some(_) => approval_v2_for(&state.db, auth.device_id, q.vault_id).await?,
+        None => None,
+    };
     metrics::counter!("cc_recovery_attempts_total", "kind" => "vault_material").increment(1);
     Ok(Json(VaultRecoveryMaterial {
         vault_id: q.vault_id,
         password_envelope,
         recovery_envelope,
         device_envelope,
+        device_approval,
+    }))
+}
+
+#[derive(sqlx::FromRow)]
+struct ApprovalV2Row {
+    request_id: Uuid,
+    approver_device_id: Uuid,
+    issued_at: i64,
+    vault_commitments: sqlx::types::Json<Vec<ApprovalVaultCommitment>>,
+    signature: Vec<u8>,
+}
+
+/// The newest v2 approval of `device_id` that covers `vault_id` (protocol
+/// 1.11), exactly as the approver signed it.
+async fn approval_v2_for(
+    db: &sqlx::PgPool,
+    device_id: cc_protocol::DeviceId,
+    vault_id: cc_protocol::VaultId,
+) -> AppResult<Option<DeviceApprovalRecord>> {
+    let row: Option<ApprovalV2Row> = sqlx::query_as(
+        "SELECT a.request_id, a.approver_device_id, a.issued_at, a.vault_commitments, a.signature
+           FROM device_approvals_v2 a
+           JOIN device_requests r ON r.id = a.request_id AND r.status = 'approved'
+          WHERE a.device_id = $1
+            AND a.vault_commitments @> jsonb_build_array(jsonb_build_object('vault_id', $2::text))
+          ORDER BY a.created_at DESC
+          LIMIT 1",
+    )
+    .bind(Uuid::from(device_id))
+    .bind(vault_id.to_string())
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|r| DeviceApprovalRecord {
+        request_id: r.request_id.into(),
+        approver_device_id: r.approver_device_id.into(),
+        issued_at: r.issued_at,
+        vault_commitments: r.vault_commitments.0,
+        signature_v2: r.signature.into(),
     }))
 }
 

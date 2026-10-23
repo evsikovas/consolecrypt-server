@@ -60,6 +60,14 @@ pub enum ServerEvent {
         device_id: DeviceId,
         vault_ids: Vec<VaultId>,
     },
+    /// A trusted device announced it is approving a request (protocol
+    /// 1.11): the new device fetches its trust request and shows the
+    /// pairing code v2.
+    DeviceApprovalIntent {
+        request_id: DeviceRequestId,
+        device_id: DeviceId,
+        approver_device_id: DeviceId,
+    },
     DeviceRevoked {
         device_id: DeviceId,
     },
@@ -138,6 +146,18 @@ mod tests {
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["type"], "device_registered");
         assert_eq!(v["platform"], "linux");
+        assert_eq!(serde_json::from_value::<ServerEvent>(v).unwrap(), e);
+    }
+
+    #[test]
+    fn approval_intent_shape() {
+        let e = ServerEvent::DeviceApprovalIntent {
+            request_id: DeviceRequestId::new(),
+            device_id: DeviceId::new(),
+            approver_device_id: DeviceId::new(),
+        };
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["type"], "device_approval_intent");
         assert_eq!(serde_json::from_value::<ServerEvent>(v).unwrap(), e);
     }
 
