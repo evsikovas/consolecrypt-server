@@ -114,6 +114,7 @@ pub fn build_router(state: AppState) -> Router {
         .route(paths::DEVICE_REJECT, post(d::reject_device))
         .route(paths::DEVICE_ATTEST, post(d::attest_device))
         .route(paths::DEVICE_REVOKE, post(d::revoke_device))
+        .route(paths::DEVICE_APPROVAL_INTENT, post(d::approval_intent))
         // vaults
         .route(paths::VAULTS, get(v::list_vaults).post(v::create_vault))
         .route(paths::VAULT, get(v::get_vault).delete(v::delete_vault))
@@ -124,6 +125,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             paths::VAULT_ENVELOPE,
             axum::routing::delete(v::delete_envelope),
+        )
+        .route(
+            paths::VAULT_KEY_COMMITMENTS,
+            get(v::list_key_commitments).put(v::put_key_commitment),
         )
         // sync
         .route(

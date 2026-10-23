@@ -155,7 +155,7 @@ async fn independent_flags_report_capabilities_and_gate_publication() {
         }
         assert_eq!(
             srv.get("/v1/meta", &owner.access).await.1["protocol_version"],
-            "1.10"
+            cc_protocol::PROTOCOL_VERSION.to_string()
         );
     }
 }

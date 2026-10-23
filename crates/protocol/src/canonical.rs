@@ -40,6 +40,17 @@ pub mod labels {
     pub const BACKUP_MANIFEST_KEY: &[u8] = b"consolecrypt/v1/backup-manifest-key";
     /// Prefix of the canonical `.ccbackup` manifest that is MACed (ADR-0102/ADR-0106).
     pub const BACKUP_MANIFEST: &[u8] = b"consolecrypt/v1/backup-manifest\0";
+
+    /// HKDF `info` of the VRK key commitment `C` (ikm = VRK, salt = vault_id;
+    /// protocol 1.11, ADR-0002). Not secret.
+    pub const VRK_COMMITMENT: &[u8] = b"cc-vrk-commit-v1";
+    /// Signed device approval v2 prefix (protocol 1.11, ADR-0004): covers the
+    /// approver's keys and, per vault, the key commitment and the envelope.
+    pub const DEVICE_APPROVAL_V2: &[u8] = b"consolecrypt/v2/device-approval\0";
+    /// Input prefix of the mutual device pairing code v2 (protocol 1.11).
+    pub const DEVICE_PAIRING_CODE_V2: &[u8] = b"cc-device-pairing-code-v2";
+    /// Signed key-commitment record of a trusted device (protocol 1.11).
+    pub const VAULT_KEY_COMMITMENT: &[u8] = b"consolecrypt/vault/key-commitment/v1\0";
 }
 
 /// Message an approving device signs with its Ed25519 key.
@@ -75,6 +86,133 @@ pub fn device_approval_message(
     for v in &vaults {
         m.extend_from_slice(v.as_bytes());
     }
+    m
+}
+
+/// One approved vault in a v2 device approval (protocol 1.11): the vault,
+/// the key commitment `C = HKDF(VRK, vault_id, VRK_COMMITMENT)` and
+/// `SHA-256(`[`device_envelope_hash_input`]`)` of the device envelope sealed
+/// for the new device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovedVaultKey {
+    pub vault_id: VaultId,
+    pub commitment: [u8; 32],
+    pub envelope_sha256: [u8; 32],
+}
+
+/// Message an approving device signs for a v2 approval (protocol 1.11).
+///
+/// ```text
+/// DEVICE_APPROVAL_V2
+/// || request_id (16)
+/// || approver_device_id (16) || approver_encryption_public_key (32) || approver_signing_public_key (32)
+/// || new_device_id (16) || new_encryption_public_key (32) || new_signing_public_key (32)
+/// || issued_at (i64 BE, unix seconds)
+/// || vault_count (u32 BE)
+/// || (vault_id (16) || commitment (32) || envelope_sha256 (32)) * vault_count   // sorted by vault_id
+/// ```
+///
+/// Entries are sorted by `vault_id`; callers reject duplicate vault ids
+/// before signing or verifying (the server answers `400`).
+#[allow(clippy::too_many_arguments)]
+pub fn device_approval_message_v2(
+    request_id: DeviceRequestId,
+    approver_device_id: DeviceId,
+    approver_encryption_public_key: &[u8; 32],
+    approver_signing_public_key: &[u8; 32],
+    new_device_id: DeviceId,
+    new_encryption_public_key: &[u8; 32],
+    new_signing_public_key: &[u8; 32],
+    issued_at: i64,
+    vaults: &[ApprovedVaultKey],
+) -> Vec<u8> {
+    let mut sorted: Vec<ApprovedVaultKey> = vaults.to_vec();
+    sorted.sort_by_key(|v| v.vault_id);
+    let mut m = Vec::with_capacity(labels::DEVICE_APPROVAL_V2.len() + 204 + 80 * sorted.len());
+    m.extend_from_slice(labels::DEVICE_APPROVAL_V2);
+    m.extend_from_slice(request_id.as_bytes());
+    m.extend_from_slice(approver_device_id.as_bytes());
+    m.extend_from_slice(approver_encryption_public_key);
+    m.extend_from_slice(approver_signing_public_key);
+    m.extend_from_slice(new_device_id.as_bytes());
+    m.extend_from_slice(new_encryption_public_key);
+    m.extend_from_slice(new_signing_public_key);
+    m.extend_from_slice(&issued_at.to_be_bytes());
+    m.extend_from_slice(&(sorted.len() as u32).to_be_bytes());
+    for v in &sorted {
+        m.extend_from_slice(v.vault_id.as_bytes());
+        m.extend_from_slice(&v.commitment);
+        m.extend_from_slice(&v.envelope_sha256);
+    }
+    m
+}
+
+/// Bytes hashed (SHA-256) to bind a device envelope into a v2 approval
+/// (protocol 1.11): `ephemeral_public_key (32) || nonce (24) || ciphertext (48)`.
+/// All three have fixed lengths in envelope format v1.
+pub fn device_envelope_hash_input(
+    ephemeral_public_key: &[u8],
+    nonce: &[u8],
+    ciphertext: &[u8],
+) -> Vec<u8> {
+    let mut m = Vec::with_capacity(ephemeral_public_key.len() + nonce.len() + ciphertext.len());
+    m.extend_from_slice(ephemeral_public_key);
+    m.extend_from_slice(nonce);
+    m.extend_from_slice(ciphertext);
+    m
+}
+
+/// Input of the mutual device pairing code v2 (protocol 1.11). Both the new
+/// and the approving device compute `SHA-256` of it and render 6 groups of 5
+/// digits like [`device_fingerprint_input`]. The code depends on the keys of
+/// **both** devices, so matching codes mean each device sees the real keys of
+/// the other.
+///
+/// ```text
+/// DEVICE_PAIRING_CODE_V2 || request_id (16)
+/// || new_device_id (16) || new_encryption_public_key (32) || new_signing_public_key (32)
+/// || approver_device_id (16) || approver_encryption_public_key (32) || approver_signing_public_key (32)
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn device_pairing_code_v2_input(
+    request_id: DeviceRequestId,
+    new_device_id: DeviceId,
+    new_encryption_public_key: &[u8; 32],
+    new_signing_public_key: &[u8; 32],
+    approver_device_id: DeviceId,
+    approver_encryption_public_key: &[u8; 32],
+    approver_signing_public_key: &[u8; 32],
+) -> Vec<u8> {
+    let mut m = Vec::with_capacity(labels::DEVICE_PAIRING_CODE_V2.len() + 176);
+    m.extend_from_slice(labels::DEVICE_PAIRING_CODE_V2);
+    m.extend_from_slice(request_id.as_bytes());
+    m.extend_from_slice(new_device_id.as_bytes());
+    m.extend_from_slice(new_encryption_public_key);
+    m.extend_from_slice(new_signing_public_key);
+    m.extend_from_slice(approver_device_id.as_bytes());
+    m.extend_from_slice(approver_encryption_public_key);
+    m.extend_from_slice(approver_signing_public_key);
+    m
+}
+
+/// Message a trusted device signs to publish the key commitment it holds for
+/// a vault (protocol 1.11, `PUT /v1/vaults/{id}/key-commitments`).
+///
+/// ```text
+/// VAULT_KEY_COMMITMENT || vault_id (16) || commitment (32) || device_id (16) || issued_at (i64 BE)
+/// ```
+pub fn vault_key_commitment_message(
+    vault_id: VaultId,
+    commitment: &[u8; 32],
+    device_id: DeviceId,
+    issued_at: i64,
+) -> Vec<u8> {
+    let mut m = Vec::with_capacity(labels::VAULT_KEY_COMMITMENT.len() + 72);
+    m.extend_from_slice(labels::VAULT_KEY_COMMITMENT);
+    m.extend_from_slice(vault_id.as_bytes());
+    m.extend_from_slice(commitment);
+    m.extend_from_slice(device_id.as_bytes());
+    m.extend_from_slice(&issued_at.to_be_bytes());
     m
 }
 
@@ -287,6 +425,106 @@ mod tests {
     }
 
     #[test]
+    fn approval_v2_message_layout_and_order() {
+        let r = DeviceRequestId::from_str("00000000-0000-7000-8000-000000000010").unwrap();
+        let a = DeviceId::from_str("00000000-0000-7000-8000-000000000011").unwrap();
+        let n = DeviceId::from_str("00000000-0000-7000-8000-000000000012").unwrap();
+        let v1 = VaultId::from_str("00000000-0000-7000-8000-000000000021").unwrap();
+        let v2 = VaultId::from_str("00000000-0000-7000-8000-000000000022").unwrap();
+        let k1 = ApprovedVaultKey {
+            vault_id: v1,
+            commitment: [3; 32],
+            envelope_sha256: [4; 32],
+        };
+        let k2 = ApprovedVaultKey {
+            vault_id: v2,
+            commitment: [5; 32],
+            envelope_sha256: [6; 32],
+        };
+        let m1 = device_approval_message_v2(
+            r,
+            a,
+            &[1; 32],
+            &[2; 32],
+            n,
+            &[7; 32],
+            &[8; 32],
+            9,
+            &[k2, k1],
+        );
+        let m2 = device_approval_message_v2(
+            r,
+            a,
+            &[1; 32],
+            &[2; 32],
+            n,
+            &[7; 32],
+            &[8; 32],
+            9,
+            &[k1, k2],
+        );
+        assert_eq!(m1, m2);
+        let body = &m1[labels::DEVICE_APPROVAL_V2.len()..];
+        assert_eq!(body.len(), 16 + 80 + 80 + 8 + 4 + 2 * 80);
+        assert_eq!(&body[..16], r.as_bytes());
+        assert_eq!(&body[16..32], a.as_bytes());
+        assert_eq!(&body[96..112], n.as_bytes());
+        assert_eq!(&body[176..184], &9i64.to_be_bytes());
+        assert_eq!(&body[184..188], &[0, 0, 0, 2]);
+        assert_eq!(&body[188..204], v1.as_bytes());
+        // Any change of a commitment or envelope hash changes the message.
+        let k1b = ApprovedVaultKey {
+            commitment: [0; 32],
+            ..k1
+        };
+        assert_ne!(
+            m1,
+            device_approval_message_v2(
+                r,
+                a,
+                &[1; 32],
+                &[2; 32],
+                n,
+                &[7; 32],
+                &[8; 32],
+                9,
+                &[k1b, k2]
+            )
+        );
+    }
+
+    #[test]
+    fn pairing_code_v2_input_binds_both_devices() {
+        let r = DeviceRequestId::new();
+        let a = DeviceId::new();
+        let n = DeviceId::new();
+        let m = device_pairing_code_v2_input(r, n, &[1; 32], &[2; 32], a, &[3; 32], &[4; 32]);
+        assert_eq!(m.len(), labels::DEVICE_PAIRING_CODE_V2.len() + 176);
+        // Swapping the roles gives a different input.
+        assert_ne!(
+            m,
+            device_pairing_code_v2_input(r, a, &[3; 32], &[4; 32], n, &[1; 32], &[2; 32])
+        );
+    }
+
+    #[test]
+    fn key_commitment_message_vector() {
+        let v = VaultId::from_str("00000000-0000-7000-8000-000000000031").unwrap();
+        let d = DeviceId::from_str("00000000-0000-7000-8000-000000000032").unwrap();
+        let m = vault_key_commitment_message(v, &[0x5a; 32], d, 1_700_000_000);
+        let mut expected = labels::VAULT_KEY_COMMITMENT.to_vec();
+        expected.extend_from_slice(v.as_bytes());
+        expected.extend_from_slice(&[0x5a; 32]);
+        expected.extend_from_slice(d.as_bytes());
+        expected.extend_from_slice(&[0, 0, 0, 0, 0x65, 0x53, 0xf1, 0x00]);
+        assert_eq!(m, expected);
+        assert_eq!(
+            device_envelope_hash_input(&[1; 32], &[2; 24], &[3; 48]).len(),
+            104
+        );
+    }
+
+    #[test]
     fn labels_are_unique() {
         let all = [
             labels::DEVICE_APPROVAL,
@@ -306,6 +544,10 @@ mod tests {
             labels::BACKUP_MANIFEST,
             labels::DEVICE_LOGIN,
             labels::REQUEST_PROOF,
+            labels::VRK_COMMITMENT,
+            labels::DEVICE_APPROVAL_V2,
+            labels::DEVICE_PAIRING_CODE_V2,
+            labels::VAULT_KEY_COMMITMENT,
         ];
         let set: std::collections::HashSet<_> = all.iter().collect();
         assert_eq!(set.len(), all.len());

@@ -12,7 +12,7 @@ use crate::crypto;
 use crate::error::{is_unique_violation, AppError, AppResult};
 use crate::util::{enum_str, parse_enum, short_text, validate_device_name};
 use cc_protocol::devices::{
-    DeviceInfo, DeviceProof, DeviceRegistration, DeviceRequestStatus, DeviceStatus,
+    DeviceApprover, DeviceInfo, DeviceProof, DeviceRegistration, DeviceRequestStatus, DeviceStatus,
     DeviceTrustRequest,
 };
 use cc_protocol::{canonical, limits};
@@ -313,11 +313,13 @@ struct RequestRow {
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     approved_by_device_id: Option<Uuid>,
+    intent_device_id: Option<Uuid>,
+    intent_at: Option<DateTime<Utc>>,
     vault_ids: Vec<Uuid>,
 }
 
 const REQUEST_SELECT: &str = "SELECT r.id, r.device_id, r.status, r.created_at, r.expires_at,
-            r.approved_by_device_id,
+            r.approved_by_device_id, r.intent_device_id, r.intent_at,
             COALESCE(array_agg(rv.vault_id ORDER BY rv.vault_id)
                      FILTER (WHERE rv.vault_id IS NOT NULL), '{}') AS vault_ids
        FROM device_requests r
@@ -352,9 +354,41 @@ pub(crate) async fn pending_requests(
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let device = device_info(db, prot, user_id, row.device_id.into(), current).await?;
-        out.push(request_to_dto(row, device)?);
+        let approver = approver_of(db, user_id, &row).await?;
+        out.push(request_to_dto(row, device, approver)?);
     }
     Ok(out)
+}
+
+/// The announced approver of a request (protocol 1.11), if any and still
+/// an active device of the account.
+async fn approver_of(
+    db: &sqlx::PgPool,
+    user_id: UserId,
+    row: &RequestRow,
+) -> AppResult<Option<DeviceApprover>> {
+    let (Some(id), Some(at)) = (row.intent_device_id, row.intent_at) else {
+        return Ok(None);
+    };
+    let found: Option<DeviceRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {DEVICE_COLUMNS} FROM devices
+          WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL"
+    )))
+    .bind(id)
+    .bind(Uuid::from(user_id))
+    .fetch_optional(db)
+    .await?;
+    let Some(d) = found else {
+        return Ok(None);
+    };
+    Ok(Some(DeviceApprover {
+        device_id: d.id.into(),
+        name: d.name,
+        platform: parse_enum(&d.platform)?,
+        encryption_public_key: d.encryption_public_key.into(),
+        signing_public_key: d.signing_public_key.into(),
+        announced_at: at,
+    }))
 }
 
 /// One trust request of `user_id`, or `404`.
@@ -374,10 +408,15 @@ pub(crate) async fn trust_request(
     .await?;
     let row = row.ok_or_else(AppError::not_found)?;
     let device = device_info(db, prot, user_id, row.device_id.into(), current).await?;
-    request_to_dto(row, device)
+    let approver = approver_of(db, user_id, &row).await?;
+    request_to_dto(row, device, approver)
 }
 
-fn request_to_dto(row: RequestRow, device: DeviceInfo) -> AppResult<DeviceTrustRequest> {
+fn request_to_dto(
+    row: RequestRow,
+    device: DeviceInfo,
+    approver: Option<DeviceApprover>,
+) -> AppResult<DeviceTrustRequest> {
     Ok(DeviceTrustRequest {
         request_id: row.id.into(),
         device,
@@ -386,6 +425,7 @@ fn request_to_dto(row: RequestRow, device: DeviceInfo) -> AppResult<DeviceTrustR
         created_at: row.created_at,
         expires_at: row.expires_at,
         approved_by_device_id: row.approved_by_device_id.map(DeviceId::from),
+        approver,
     })
 }
 
