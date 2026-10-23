@@ -99,16 +99,24 @@ def release(tag: str | None) -> dict:
 DOCS_BASE = f"https://github.com/{REPO}/blob/main/server/docs/releases/"
 
 
-def notes_body(body: str) -> str:
+def notes_body(body: str, lang: str = "ru") -> str:
     """The release notes without the title and the build footer (source,
-    verified build, image digest hints)."""
+    verified build, image digest hints). Notes with an `## English` section
+    (since 0.2.2) give the Russian part to `ru` and that section to `en`;
+    `###` headings inside it become `##`."""
     lines = []
+    english = None
     for line in body.splitlines():
         if re.match(r"^#\s", line):
             continue
         if line.startswith(("[Source]", "Linux AMD64", "Image:")):
             break
-        lines.append(line)
+        if re.match(r"^##\s+English\s*$", line):
+            english = []
+            continue
+        (lines if english is None else english).append(line)
+    if lang == "en" and english is not None:
+        lines = [re.sub(r"^###(\s)", r"##\1", line) for line in english]
     return "\n".join(lines)
 
 
@@ -196,7 +204,7 @@ def message(data: dict, lang: str) -> str:
         "",
         f'<a href="{release_url}">{t["release"]}</a>',
     ])
-    notes = blocks(notes_body(data.get("body") or ""))
+    notes = blocks(notes_body(data.get("body") or "", lang))
     more = f'<a href="{release_url}">{t["notes"]} →</a>'
     budget = LIMIT - visible_length(title) - visible_length(tail) - visible_length(more) - 8
     kept: list[str] = []
