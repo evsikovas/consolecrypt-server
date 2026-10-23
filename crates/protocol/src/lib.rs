@@ -26,6 +26,7 @@ pub mod ids;
 pub mod limits;
 pub mod meta;
 pub mod paths;
+pub mod quotas;
 pub mod recovery;
 pub mod sharing;
 pub mod sharing_enrollment;

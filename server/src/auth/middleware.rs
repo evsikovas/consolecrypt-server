@@ -29,6 +29,16 @@ pub async fn authenticate(State(state): State<AppState>, req: Request, next: Nex
         Ok(found) => found,
         Err(err) => return err.into_response(),
     };
+    // Reads create no data: a generous per-replica limit, off the database.
+    if parts.method == axum::http::Method::GET {
+        if let Err(err) = state
+            .limits
+            .read_device
+            .check(&uuid::Uuid::from(ctx.device_id))
+        {
+            return err.into_response();
+        }
+    }
 
     let body = match parts.headers.get(HEADER_DEVICE_PROOF) {
         None => {

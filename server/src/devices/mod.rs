@@ -10,6 +10,7 @@ use crate::auth::sessions;
 use crate::config::DeviceProtectionConfig;
 use crate::crypto;
 use crate::error::{is_unique_violation, AppError, AppResult};
+use crate::limiter::Quotas;
 use crate::util::{enum_str, parse_enum, short_text, validate_device_name};
 use cc_protocol::devices::{
     DeviceInfo, DeviceProof, DeviceRegistration, DeviceRequestStatus, DeviceStatus,
@@ -55,11 +56,14 @@ struct ExistingDevice {
 ///
 /// Device ids are global (ADR-0201): an id owned by another account or with
 /// different keys → `409 already_exists`; a revoked id → `403 device_revoked`.
+/// A new device beyond the account's device quotas (`quota.v2`) → `403
+/// forbidden` with `details.reason` `device_limit` / `device_daily_limit`.
 pub async fn register_or_match(
     conn: &mut PgConnection,
     user_id: UserId,
     reg: &DeviceRegistration,
     proof: Option<&DeviceProof>,
+    quota: &Quotas,
 ) -> AppResult<DeviceOutcome> {
     let name = validate_device_name(&reg.name)?;
     let client_version = short_text(reg.client_version.as_deref(), 64);
@@ -73,6 +77,9 @@ pub async fn register_or_match(
 
     match existing {
         None => {
+            if quota.v2 {
+                check_device_quota(conn, user_id, quota).await?;
+            }
             // Optional for a new device; if sent, it must be valid.
             if let Some(proof) = proof {
                 verify_device_proof(
@@ -134,6 +141,105 @@ pub async fn register_or_match(
             Ok(DeviceOutcome::Existing)
         }
     }
+}
+
+/// TR-3: active devices per account and new devices per 24 hours, checked
+/// under the account row lock (like the vault quota) so concurrent sign-ins
+/// on any replica cannot overshoot.
+async fn check_device_quota(
+    conn: &mut PgConnection,
+    user_id: UserId,
+    quota: &Quotas,
+) -> AppResult<()> {
+    use cc_protocol::quotas::reason;
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(Uuid::from(user_id))
+        .execute(&mut *conn)
+        .await?;
+    let (active, recent): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE revoked_at IS NULL),
+                count(*) FILTER (WHERE created_at > now() - interval '1 day')
+           FROM devices WHERE user_id = $1",
+    )
+    .bind(Uuid::from(user_id))
+    .fetch_one(&mut *conn)
+    .await?;
+    if active >= quota.max_devices {
+        metrics::counter!("cc_quota_rejected_total", "reason" => reason::DEVICE_LIMIT).increment(1);
+        return Err(
+            AppError::forbidden("device limit reached for this account").with_details(
+                serde_json::json!({
+                    "reason": reason::DEVICE_LIMIT,
+                    "limit": quota.max_devices,
+                }),
+            ),
+        );
+    }
+    let per_day = quota.new_devices_per_day;
+    if per_day > 0 && recent >= per_day {
+        // The window drops below the limit when the per_day-th newest device
+        // of the last 24 hours leaves it.
+        let until: Option<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT created_at + interval '1 day' FROM devices
+              WHERE user_id = $1 AND created_at > now() - interval '1 day'
+              ORDER BY created_at DESC OFFSET $2 LIMIT 1",
+        )
+        .bind(Uuid::from(user_id))
+        .bind(per_day - 1)
+        .fetch_optional(&mut *conn)
+        .await?;
+        metrics::counter!("cc_quota_rejected_total", "reason" => reason::DEVICE_DAILY_LIMIT)
+            .increment(1);
+        return Err(
+            AppError::forbidden("too many new devices for this account today").with_details(
+                serde_json::json!({
+                    "reason": reason::DEVICE_DAILY_LIMIT,
+                    "limit": per_day,
+                    "until": until.unwrap_or_else(|| Utc::now() + chrono::Duration::days(1)),
+                }),
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// Whether `proof` proves possession of `device_id`, an active device of
+/// `user_id` (protocol 1.4 login proof). Read-only: the nonce must still be
+/// unused and is consumed later by [`register_or_match`], so a proof seen
+/// once can never vouch for a second sign-in attempt.
+pub async fn is_known_device(
+    db: &sqlx::PgPool,
+    user_id: UserId,
+    device_id: DeviceId,
+    proof: &DeviceProof,
+) -> AppResult<bool> {
+    let key: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT signing_public_key FROM devices
+          WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(Uuid::from(device_id))
+    .bind(Uuid::from(user_id))
+    .fetch_optional(db)
+    .await?;
+    let (Some(key), Some(nonce)) = (key, proof.nonce.to_array::<32>()) else {
+        return Ok(false);
+    };
+    if Utc::now().timestamp().abs_diff(proof.issued_at) > limits::MAX_SIGNATURE_SKEW_SECONDS as u64
+    {
+        return Ok(false);
+    }
+    let message = canonical::device_login_message(device_id, proof.issued_at, &nonce);
+    if !crypto::verify_ed25519(&key, &message, proof.signature.as_slice()) {
+        return Ok(false);
+    }
+    let used: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM device_login_nonces WHERE device_id = $1 AND nonce = $2)",
+    )
+    .bind(Uuid::from(device_id))
+    .bind(&nonce[..])
+    .fetch_one(db)
+    .await?;
+    Ok(!used)
 }
 
 fn proof_error(reason: &'static str) -> AppError {

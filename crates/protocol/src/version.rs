@@ -21,7 +21,7 @@ use std::str::FromStr;
 /// * minor — additive, backwards compatible change.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion {
     major: 1,
-    minor: 10,
+    minor: 11,
 };
 
 /// URL prefix for the current major version.

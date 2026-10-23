@@ -99,6 +99,11 @@ enum AdminCommand {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// Request limits and quotas: show them, override them per account.
+    Limits {
+        #[command(subcommand)]
+        command: LimitsCommand,
+    },
     /// After restoring the database from a backup: rotate vault epochs so
     /// clients detect the rollback and re-upload what the backup lacks.
     #[command(group(clap::ArgGroup::new("target").required(true).args(["vault", "all"])))]
@@ -148,6 +153,30 @@ enum IdentityCommand {
         email: String,
         #[arg(long)]
         subject: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum LimitsCommand {
+    /// Effective limits and quotas (of one account with --email).
+    Show {
+        #[arg(long)]
+        email: Option<String>,
+    },
+    /// Override limits/quotas of an account: key=value… (e.g.
+    /// push_account_rate=600/min max_vault_objects=200000).
+    Set {
+        #[arg(long)]
+        email: String,
+        #[arg(required = true, value_name = "KEY=VALUE")]
+        values: Vec<String>,
+    },
+    /// Remove overrides of an account (all of them without keys).
+    Reset {
+        #[arg(long)]
+        email: String,
+        #[arg(value_name = "KEY")]
+        keys: Vec<String>,
     },
 }
 
@@ -268,6 +297,27 @@ async fn run_admin(pool: &sqlx::PgPool, config: &Config, cmd: AdminCommand) -> a
         } => {
             let n = admin::identity_unlink(pool, &email, subject.as_deref()).await?;
             println!("{n} identity link(s) removed");
+        }
+        AdminCommand::Limits {
+            command: LimitsCommand::Show { email },
+        } => {
+            for line in admin::limits_show(pool, config, email.as_deref()).await? {
+                println!("{line}");
+            }
+        }
+        AdminCommand::Limits {
+            command: LimitsCommand::Set { email, values },
+        } => {
+            for (key, value) in admin::limits_set(pool, &email, &values).await? {
+                println!("{key} = {value}");
+            }
+            println!("running servers apply the change within 30 seconds");
+        }
+        AdminCommand::Limits {
+            command: LimitsCommand::Reset { email, keys },
+        } => {
+            let n = admin::limits_reset(pool, &email, &keys).await?;
+            println!("{n} override(s) removed");
         }
         AdminCommand::Session {
             command: SessionCommand::Revoke { email },

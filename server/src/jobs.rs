@@ -56,6 +56,10 @@ pub struct MaintenanceReport {
     pub protection_rows_deleted: u64,
     /// Expired OIDC flows / login codes and LDAP failure windows (1.8).
     pub enterprise_rows_deleted: u64,
+    /// Request-limit buckets untouched for a day (full again, S2).
+    pub rate_buckets_deleted: u64,
+    /// Tombstones of all vaults (also exported as `cc_tombstones_total`).
+    pub tombstones: i64,
     pub sync_mutations_deleted: u64,
     pub vaults_purged: u64,
     /// Retained content of owner-deleted shared items past the restore window.
@@ -170,6 +174,20 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<MaintenanceReport> {
             report.protection_rows_deleted +=
                 sqlx::query(sql).execute(&mut *conn).await?.rows_affected();
         }
+
+        // A bucket untouched for a day has refilled completely (no default
+        // limit takes longer), so dropping it changes nothing.
+        report.rate_buckets_deleted =
+            sqlx::query("DELETE FROM rate_buckets WHERE updated_at < now() - interval '1 day'")
+                .execute(&mut *conn)
+                .await?
+                .rows_affected();
+        report.tombstones = sqlx::query_scalar(
+            "SELECT COALESCE(sum(tombstone_count), 0)::bigint FROM vault_sequences",
+        )
+        .fetch_one(&mut *conn)
+        .await?;
+        metrics::gauge!("cc_tombstones_total").set(report.tombstones as f64);
 
         // Enterprise sign-in: flows live 10 min, login codes 60 s, failure
         // windows at most a day.

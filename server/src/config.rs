@@ -15,11 +15,13 @@ use std::time::Duration;
 
 mod auth;
 mod file;
+pub mod limits;
 pub use auth::{
     check_idp_url, email_domain, AuthConfig, AuthModeKind, LdapConfig, OidcConfig, OidcPreset,
     ProviderKind, TokenAuthMethod, DEFAULT_LDAP_USER_FILTER,
 };
 pub use file::ConfigSource;
+pub use limits::{Limit, LimitSpec, QuotaConfig, RateLimitMode, RequestLimits};
 
 /// Default AGPL §13 source offer (ADR-0005). Operators of modified builds must
 /// set `CC_SOURCE_CODE_URL` to where their modified source can be obtained.
@@ -78,8 +80,11 @@ pub struct Config {
     pub auth: AuthConfig,
     /// Byte budget of one `changes`/`snapshot` page.
     pub sync_page_bytes: usize,
-    /// Quota: bytes of live ciphertext per vault (push beyond → 413).
+    /// Quota: bytes of live ciphertext (plus tombstones, see `quotas`) per
+    /// vault (push beyond → 413).
     pub max_vault_bytes: i64,
+    /// Object, tombstone and device quotas (security audit S2).
+    pub quotas: QuotaConfig,
     /// Quota: vaults an account may own (create beyond → 403).
     pub max_vaults_per_account: i64,
     /// Teams (protocol 1.9): `/v1/teams/*` (`CC_TEAMS_ENABLED`, default on).
@@ -123,15 +128,21 @@ pub struct PasswordHashingConfig {
 
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
+    /// `false` turns off every request limit (not the quotas).
     pub enabled: bool,
-    /// Public auth endpoints, per client IP, per minute (burst = same).
+    /// `CC_RATE_LIMIT_MODE`: enforce or only observe the PostgreSQL limits
+    /// (sign-in limits always enforce).
+    pub mode: RateLimitMode,
+    /// In-memory first stage: public auth endpoints, per client IP, per
+    /// minute, per replica (burst = same).
     pub auth_per_ip_per_minute: u32,
-    /// Login attempts per email per minute.
-    pub login_per_email_per_minute: u32,
-    /// Forgot-password / account-recovery emails per email per hour.
-    pub recovery_per_email_per_hour: u32,
-    /// Attest / approve attempts per device per minute.
+    /// In-memory: attest / approve attempts per device per minute.
     pub proof_per_device_per_minute: u32,
+    /// In-memory: authenticated reads (GET) per device per minute, per
+    /// replica (0 = off). Reads create no data, so they stay off the database.
+    pub read_per_device_per_minute: u32,
+    /// PostgreSQL token buckets shared by all replicas.
+    pub limits: RequestLimits,
 }
 
 /// New-device protection: quarantine, envelope hand-out limits for untrusted
@@ -365,26 +376,33 @@ impl Config {
             },
             rate_limits: RateLimitConfig {
                 enabled: parse_bool(get("CC_RATE_LIMIT_ENABLED"), "CC_RATE_LIMIT_ENABLED", true)?,
+                // New in 0.2.2: observe first, enforce once the thresholds
+                // are checked against real traffic (spec S2 §6).
+                mode: match get("CC_RATE_LIMIT_MODE").as_deref().map(str::trim) {
+                    None | Some("observe") => RateLimitMode::Observe,
+                    Some("enforce") => RateLimitMode::Enforce,
+                    Some(_) => {
+                        return Err(ConfigError(
+                            "CC_RATE_LIMIT_MODE: expected enforce or observe".into(),
+                        ))
+                    }
+                },
                 auth_per_ip_per_minute: parse_or(
                     get("CC_RATE_LIMIT_AUTH_PER_IP_PER_MINUTE"),
                     "CC_RATE_LIMIT_AUTH_PER_IP_PER_MINUTE",
                     30,
-                )?,
-                login_per_email_per_minute: parse_or(
-                    get("CC_RATE_LIMIT_LOGIN_PER_EMAIL_PER_MINUTE"),
-                    "CC_RATE_LIMIT_LOGIN_PER_EMAIL_PER_MINUTE",
-                    10,
-                )?,
-                recovery_per_email_per_hour: parse_or(
-                    get("CC_RATE_LIMIT_RECOVERY_PER_EMAIL_PER_HOUR"),
-                    "CC_RATE_LIMIT_RECOVERY_PER_EMAIL_PER_HOUR",
-                    5,
                 )?,
                 proof_per_device_per_minute: parse_or(
                     get("CC_RATE_LIMIT_PROOF_PER_DEVICE_PER_MINUTE"),
                     "CC_RATE_LIMIT_PROOF_PER_DEVICE_PER_MINUTE",
                     20,
                 )?,
+                read_per_device_per_minute: parse_or(
+                    get("CC_RATE_LIMIT_READ_PER_DEVICE_PER_MINUTE"),
+                    "CC_RATE_LIMIT_READ_PER_DEVICE_PER_MINUTE",
+                    1200,
+                )?,
+                limits: RequestLimits::from_lookup(&get)?,
             },
             device_protection: DeviceProtectionConfig {
                 enabled: parse_bool(
@@ -443,6 +461,29 @@ impl Config {
                 "CC_MAX_VAULT_BYTES",
                 1024 * 1024 * 1024,
             )?,
+            quotas: QuotaConfig {
+                v2_enabled: parse_bool(get("CC_QUOTAS_V2_ENABLED"), "CC_QUOTAS_V2_ENABLED", true)?,
+                tombstone_cost_bytes: parse_or(
+                    get("CC_TOMBSTONE_COST_BYTES"),
+                    "CC_TOMBSTONE_COST_BYTES",
+                    256,
+                )?,
+                max_vault_objects: parse_or(
+                    get("CC_MAX_VAULT_OBJECTS"),
+                    "CC_MAX_VAULT_OBJECTS",
+                    100_000,
+                )?,
+                max_devices_per_account: parse_or(
+                    get("CC_MAX_DEVICES_PER_ACCOUNT"),
+                    "CC_MAX_DEVICES_PER_ACCOUNT",
+                    20,
+                )?,
+                new_devices_per_account_per_day: parse_or(
+                    get("CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY"),
+                    "CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY",
+                    10,
+                )?,
+            },
             max_vaults_per_account: parse_or(
                 get("CC_MAX_VAULTS_PER_ACCOUNT"),
                 "CC_MAX_VAULTS_PER_ACCOUNT",
@@ -545,6 +586,19 @@ impl Config {
         if self.sync_page_bytes < 64 * 1024 {
             return err("CC_SYNC_PAGE_BYTES must be >= 65536");
         }
+        let q = &self.quotas;
+        if !(1..=limits::MAX_DEVICES_CEILING).contains(&q.max_devices_per_account) {
+            return err("CC_MAX_DEVICES_PER_ACCOUNT must be between 1 and 64");
+        }
+        if q.max_vault_objects < 1
+            || q.new_devices_per_account_per_day < 0
+            || !(0..=1024 * 1024).contains(&q.tombstone_cost_bytes)
+        {
+            return err(
+                "CC_MAX_VAULT_OBJECTS must be >= 1, CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY >= 0, \
+                 CC_TOMBSTONE_COST_BYTES between 0 and 1048576",
+            );
+        }
         if self.ws_max_connections_per_user == 0
             || self.max_vaults_per_account < 1
             || self.max_teams_per_account < 1
@@ -578,6 +632,10 @@ impl Config {
             max_concurrent: 8,
         };
         c.rate_limits.enabled = false;
+        // Like the request limits, the device quotas are opted into by the
+        // tests that exercise them (many tests sign in dozens of devices).
+        c.quotas.max_devices_per_account = limits::MAX_DEVICES_CEILING;
+        c.quotas.new_devices_per_account_per_day = 0;
         c.maintenance_interval = Duration::ZERO;
         c
     }
@@ -644,6 +702,7 @@ impl fmt::Debug for Config {
             .field("metrics_listen", &self.metrics_listen)
             .field("log_format", &self.log_format)
             .field("rate_limits", &self.rate_limits)
+            .field("quotas", &self.quotas)
             .field("device_protection", &self.device_protection)
             .field("mail", &self.mail)
             .field("auth", &self.auth)

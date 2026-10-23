@@ -96,6 +96,16 @@ impl AppError {
         }
     }
 
+    /// A field of `details`, if any.
+    pub fn detail(&self, key: &str) -> Option<&serde_json::Value> {
+        match self {
+            AppError::Api {
+                details: Some(d), ..
+            } => d.get(key),
+            _ => None,
+        }
+    }
+
     pub fn bad_request(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(ErrorCode::BadRequest, message)
     }

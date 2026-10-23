@@ -314,21 +314,53 @@ config:
     # memory: 4 × 19 MiB. Empty = number of CPUs visible to the container,
     # which without a CPU limit is the node's core count.
     maxConcurrent: 4
-  # Rate limits (per pod).
+  # Request limits (server 0.2.2). Writes, mails and sign-ins are limited in
+  # PostgreSQL token buckets shared by all pods; refusals are 429 with
+  # Retry-After and details.limit. Reads keep cheap per-pod limits.
   rateLimit:
+    # -- CC_RATE_LIMIT_ENABLED: false turns off every request limit (not the quotas).
     enabled: true
+    # -- CC_RATE_LIMIT_MODE: "observe" (0.2.2 default: refusals are only counted in
+    # cc_rate_limit_observed_total) or "enforce". Check the metric for a week,
+    # then enforce. Sign-in limits always enforce.
+    mode: observe
+    # -- Per-pod first stage of the public auth endpoints per client IP.
     authPerIpPerMinute: 30
+    # -- Failed sign-ins per e-mail and client network per minute
+    # (= limits.login_email.rate).
     loginPerEmailPerMinute: 10
+    # -- Recovery requests per e-mail and client network per hour
+    # (= limits.recovery_email.rate).
     recoveryPerEmailPerHour: 5
+    # -- Vault access key attempts per device per minute (per pod).
     proofPerDevicePerMinute: 20
+    # -- Authenticated reads (GET) per device per minute (per pod; 0 = off).
+    readPerDevicePerMinute: 1200
+    # -- Overrides of the PostgreSQL limits → CC_LIMIT_<NAME>_{RATE,BURST,PER_HOUR,PER_DAY}.
+    # Names and defaults: HOSTING.md, `consolecrypt-server admin limits show`.
+    # rate is "N" (per the limit's own period) or "N/min|hour|day"; 0 = off.
+    # Example: {push_account: {rate: "600/min", burst: 600}, recipient_lookup_account: {perDay: 100}}
+    limits: {}
   sync:
     # -- Byte budget of one changes/snapshot page (CC_SYNC_PAGE_BYTES).
     pageBytes: 8388608
   quotas:
-    # -- Live ciphertext per vault (CC_MAX_VAULT_BYTES); pushes beyond → 413.
+    # -- Ciphertext + tombstones per vault (CC_MAX_VAULT_BYTES); pushes beyond → 413.
     maxVaultBytes: 1073741824
     # -- Vaults an account may own (CC_MAX_VAULTS_PER_ACCOUNT); beyond → 403.
     maxVaultsPerAccount: 50
+    # -- CC_QUOTAS_V2_ENABLED (server 0.2.2): object and device quotas, tombstone
+    # accounting, deletes of unknown objects without tombstones.
+    v2Enabled: true
+    # -- Bytes each tombstone counts against maxVaultBytes (CC_TOMBSTONE_COST_BYTES).
+    tombstoneCostBytes: 256
+    # -- Live objects + tombstones per vault (CC_MAX_VAULT_OBJECTS); beyond → 413.
+    maxVaultObjects: 100000
+    # -- Active devices per account, at most 64 (CC_MAX_DEVICES_PER_ACCOUNT);
+    # sign-in of one more → 403 device_limit.
+    maxDevicesPerAccount: 20
+    # -- New devices per account in 24 hours (CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY; 0 = no limit).
+    newDevicesPerAccountPerDay: 10
   websocket:
     pingIntervalSecs: 30
     sessionRecheckSecs: 30

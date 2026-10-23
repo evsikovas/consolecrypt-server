@@ -70,6 +70,11 @@ pub enum AuditType {
     TeamOwnerTransferred,
     TeamLeft,
     TeamKeyRotated,
+    /// A request limit refused (or, in observe mode, would have refused) a
+    /// request of the account; at most once per hour per account and limit.
+    LimitExceeded,
+    /// A quota (objects, bytes, devices) refused a request of the account.
+    QuotaExceeded,
 }
 
 impl AuditType {
@@ -129,6 +134,8 @@ impl AuditType {
             AuditType::TeamOwnerTransferred => "team_owner_transferred",
             AuditType::TeamLeft => "team_left",
             AuditType::TeamKeyRotated => "team_key_rotated",
+            AuditType::LimitExceeded => "limit_exceeded",
+            AuditType::QuotaExceeded => "quota_exceeded",
         }
     }
 }

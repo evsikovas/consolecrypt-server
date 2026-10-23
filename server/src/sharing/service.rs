@@ -333,6 +333,10 @@ pub async fn create(
     req: CreateShareRequest,
 ) -> AppResult<SharedItemState> {
     require_enabled(state)?;
+    state
+        .rate
+        .account(state, crate::config::Limit::ShareWriteAccount, auth.user_id)
+        .await?;
     if state.config.require_email_verification && !auth.email_verified {
         return Err(AppError::new(
             ErrorCode::EmailNotVerified,
@@ -467,6 +471,14 @@ async fn transition(
     revision: SharedRevision,
 ) -> AppResult<SharedItemState> {
     require_enabled(state_)?;
+    state_
+        .rate
+        .account(
+            state_,
+            crate::config::Limit::ShareRevisionAccount,
+            auth.user_id,
+        )
+        .await?;
     let mut tx = state_.db.begin().await?;
     let (_, next) = transition_in_transaction(&mut tx, state_, auth, id, access, revision).await?;
     tx.commit().await?;
@@ -980,6 +992,14 @@ pub async fn recipient(
     email: &str,
 ) -> AppResult<SharingRecipient> {
     require_enabled(state)?;
+    state
+        .rate
+        .account(
+            state,
+            crate::config::Limit::RecipientLookupAccount,
+            auth.user_id,
+        )
+        .await?;
     state
         .limits
         .proof_device

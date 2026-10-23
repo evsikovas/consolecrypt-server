@@ -2,8 +2,14 @@
 // Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
 
 //! In-process keyed rate limiters (ADR-0201). Limits are per replica.
+//!
+//! They are the cheap first stage: the per-IP flood guard of the public auth
+//! endpoints, vault-key guessing per device and authenticated reads (which
+//! create no data and stay off the database on purpose). Everything that
+//! writes, mails or costs real resources is limited in PostgreSQL by
+//! [`crate::limiter`], shared by all replicas.
 
-use crate::config::RateLimitConfig;
+use crate::config::{RateLimitConfig, RateLimitMode};
 use crate::error::{AppError, AppResult};
 use governor::clock::{Clock, DefaultClock};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
@@ -17,6 +23,8 @@ use uuid::Uuid;
 pub struct Keyed<K: Hash + Eq + Clone> {
     limiter: Option<DefaultKeyedRateLimiter<K>>,
     name: &'static str,
+    /// Only count what would be refused (`CC_RATE_LIMIT_MODE=observe`).
+    observe: bool,
 }
 
 impl<K: Hash + Eq + Clone> fmt::Debug for Keyed<K> {
@@ -38,7 +46,16 @@ impl<K: Hash + Eq + Clone> Keyed<K> {
                 .allow_burst(burst);
             RateLimiter::keyed(quota)
         });
-        Self { limiter, name }
+        Self {
+            limiter,
+            name,
+            observe: false,
+        }
+    }
+
+    fn observing(mut self, observe: bool) -> Self {
+        self.observe = observe;
+        self
     }
 
     /// Consume one unit for `key`, or fail with `429 rate_limited`.
@@ -48,12 +65,18 @@ impl<K: Hash + Eq + Clone> Keyed<K> {
         };
         match limiter.check_key(key) {
             Ok(()) => Ok(()),
+            Err(_) if self.observe => {
+                metrics::counter!("cc_rate_limit_observed_total", "limiter" => self.name)
+                    .increment(1);
+                Ok(())
+            }
             Err(not_until) => {
                 let wait = not_until.wait_time_from(DefaultClock::default().now());
                 metrics::counter!("cc_rate_limited_total", "limiter" => self.name).increment(1);
-                Err(AppError::rate_limited(
-                    wait.as_secs().saturating_add(1) as u32
-                ))
+                Err(
+                    AppError::rate_limited(wait.as_secs().saturating_add(1) as u32)
+                        .with_details(serde_json::json!({ "limit": self.name })),
+                )
             }
         }
     }
@@ -69,39 +92,38 @@ impl<K: Hash + Eq + Clone> Keyed<K> {
 /// All limiters of one server instance.
 #[derive(Debug)]
 pub struct RateLimiters {
-    /// Public auth endpoints per client IP.
+    /// Public auth endpoints per client IP (first stage; the shared limit
+    /// is `auth_ip` in PostgreSQL).
     pub auth_ip: Keyed<IpAddr>,
-    /// Login attempts per (lower-cased) email.
-    pub login_email: Keyed<String>,
-    /// Password-reset / account-recovery mails per email.
-    pub recovery_email: Keyed<String>,
     /// Attest/approve proofs per device.
     pub proof_device: Keyed<Uuid>,
+    /// Authenticated reads (GET) per device.
+    pub read_device: Keyed<Uuid>,
 }
 
 impl RateLimiters {
     pub fn new(cfg: &RateLimitConfig) -> Self {
         let minute = Duration::from_secs(60);
         Self {
-            auth_ip: Keyed::new("auth_ip", cfg.enabled, cfg.auth_per_ip_per_minute, minute),
-            login_email: Keyed::new(
-                "login_email",
+            auth_ip: Keyed::new(
+                cc_protocol::quotas::limit::AUTH_IP,
                 cfg.enabled,
-                cfg.login_per_email_per_minute,
+                cfg.auth_per_ip_per_minute,
                 minute,
             ),
-            recovery_email: Keyed::new(
-                "recovery_email",
-                cfg.enabled,
-                cfg.recovery_per_email_per_hour,
-                Duration::from_secs(3600),
-            ),
             proof_device: Keyed::new(
-                "proof_device",
+                cc_protocol::quotas::limit::PROOF_DEVICE,
                 cfg.enabled,
                 cfg.proof_per_device_per_minute,
                 minute,
             ),
+            read_device: Keyed::new(
+                cc_protocol::quotas::limit::READ_DEVICE,
+                cfg.enabled && cfg.read_per_device_per_minute > 0,
+                cfg.read_per_device_per_minute,
+                minute,
+            )
+            .observing(cfg.mode == RateLimitMode::Observe),
         }
     }
 
@@ -117,9 +139,8 @@ impl RateLimiters {
     /// Drop idle keys; called periodically.
     pub fn housekeeping(&self) {
         self.auth_ip.retain_recent();
-        self.login_email.retain_recent();
-        self.recovery_email.retain_recent();
         self.proof_device.retain_recent();
+        self.read_device.retain_recent();
     }
 }
 
@@ -135,6 +156,18 @@ pub fn rate_limit_key(ip: IpAddr) -> IpAddr {
                 IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
             }
         },
+    }
+}
+
+/// Network of a client address for the per-e-mail sign-in limits: IPv4 /24,
+/// IPv6 /64. One subscriber or office usually owns such a network.
+pub fn subnet_key(ip: IpAddr) -> IpAddr {
+    match rate_limit_key(ip) {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            IpAddr::V4(std::net::Ipv4Addr::new(o[0], o[1], o[2], 0))
+        }
+        v6 => v6,
     }
 }
 
@@ -157,6 +190,25 @@ mod tests {
     }
 
     #[test]
+    fn subnets_are_ipv4_24_and_ipv6_64() {
+        let a: IpAddr = "192.0.2.7".parse().unwrap();
+        let b: IpAddr = "::ffff:192.0.2.200".parse().unwrap();
+        let c: IpAddr = "192.0.3.7".parse().unwrap();
+        assert_eq!(subnet_key(a), subnet_key(b));
+        assert_ne!(subnet_key(a), subnet_key(c));
+        let d: IpAddr = "2001:db8:1:2::9".parse().unwrap();
+        assert_eq!(subnet_key(d), rate_limit_key(d));
+    }
+
+    #[test]
+    fn observe_mode_counts_but_never_refuses() {
+        let k: Keyed<u8> = Keyed::new("t", true, 1, Duration::from_secs(60)).observing(true);
+        for _ in 0..5 {
+            assert!(k.check(&1).is_ok());
+        }
+    }
+
+    #[test]
     fn limits_after_burst() {
         let k: Keyed<u8> = Keyed::new("t", true, 3, Duration::from_secs(60));
         assert!(k.check(&1).is_ok());
@@ -164,6 +216,7 @@ mod tests {
         assert!(k.check(&1).is_ok());
         let err = k.check(&1).unwrap_err();
         assert_eq!(err.code(), cc_protocol::ErrorCode::RateLimited);
+        assert!(format!("{err}").contains("too many requests"));
         // Other keys are independent.
         assert!(k.check(&2).is_ok());
     }

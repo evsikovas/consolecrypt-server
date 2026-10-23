@@ -187,7 +187,8 @@ async fn seed_personal_vault(pool: &sqlx::PgPool) -> (Uuid, Uuid, Uuid) {
 /// The device-protection bookkeeping columns (0008) are derived, not data,
 /// and are checked by their own upgrade test. The team columns (0012) carry
 /// defaults for personal vaults and are checked by
-/// `teams_upgrade_marks_existing_vaults_personal`.
+/// `teams_upgrade_marks_existing_vaults_personal`. The object counters (0013)
+/// are derived and checked by `quota_upgrade_counts_objects_and_tombstones`.
 async fn personal_snapshot(pool: &sqlx::PgPool) -> serde_json::Value {
     sqlx::query_scalar(
         "SELECT jsonb_build_object(
@@ -199,7 +200,8 @@ async fn personal_snapshot(pool: &sqlx::PgPool) -> serde_json::Value {
            'members', (SELECT jsonb_agg(to_jsonb(t) - 'identity_encryption_key'
                                         - 'identity_signing_key'
                                         ORDER BY vault_id, user_id) FROM vault_members t),
-           'sequences', (SELECT jsonb_agg(to_jsonb(t) ORDER BY vault_id) FROM vault_sequences t),
+           'sequences', (SELECT jsonb_agg(to_jsonb(t) - 'object_count' - 'tombstone_count'
+                                         ORDER BY vault_id) FROM vault_sequences t),
            'envelopes', (SELECT jsonb_agg(to_jsonb(t) - 'key_epoch' ORDER BY id)
                          FROM vault_key_envelopes t),
            'objects', (SELECT jsonb_agg(to_jsonb(t) ORDER BY vault_id, object_id) FROM vault_objects t)
@@ -235,6 +237,43 @@ async fn teams_upgrade_marks_existing_vaults_personal() {
             .await
             .unwrap();
     assert!(envelope_epochs.iter().all(|e| *e == 0));
+}
+
+#[tokio::test]
+async fn quota_upgrade_counts_objects_and_tombstones() {
+    let Some((db, _)) = TestDb::create().await else {
+        return;
+    };
+    MIGRATOR.run_to(12, &db.pool).await.unwrap();
+    let (_, device, vault) = seed_personal_vault(&db.pool).await;
+    sqlx::query(
+        "INSERT INTO vault_objects (vault_id, object_id, revision, sequence, deleted, writer_device_id)
+         VALUES ($1, $2, 2, 2, true, $3)",
+    )
+    .bind(vault)
+    .bind(Uuid::now_v7())
+    .bind(device)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    MIGRATOR.run(&db.pool).await.unwrap();
+    let counts: (i64, i64) = sqlx::query_as(
+        "SELECT object_count, tombstone_count FROM vault_sequences WHERE vault_id = $1",
+    )
+    .bind(vault)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(counts, (2, 1));
+    // The limiter function is usable right after the upgrade.
+    let (refused, _): (i32, f64) = sqlx::query_as(
+        "SELECT * FROM cc_rate_take(ARRAY['t'], ARRAY[gen_random_uuid()], ARRAY[1.0::float8],
+                                    ARRAY[1.0::float8], ARRAY[1.0::float8])",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(refused, 0);
 }
 
 #[tokio::test]

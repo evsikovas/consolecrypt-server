@@ -59,6 +59,21 @@ pub async fn create_trust_request(
     ClientIp(ip): ClientIp,
     ApiJsonOrDefault(req): ApiJsonOrDefault<CreateDeviceTrustRequest>,
 ) -> AppResult<(StatusCode, Json<DeviceTrustRequest>)> {
+    {
+        use crate::config::Limit;
+        use crate::limiter::{Check, Key};
+        state
+            .rate
+            .check(
+                &state,
+                Some(auth.user_id),
+                &[
+                    Check::new(Limit::TrustRequestDevice, Key::Device(auth.device_id)),
+                    Check::new(Limit::TrustRequestAccount, Key::Account(auth.user_id)),
+                ],
+            )
+            .await?;
+    }
     let accessible: Vec<Uuid> = sqlx::query_scalar(
         "SELECT v.id FROM vaults v
            JOIN vault_members m ON m.vault_id = v.id AND m.user_id = $1 AND m.revoked_at IS NULL
@@ -632,7 +647,7 @@ pub async fn deny_device(
     ClientIp(ip): ClientIp,
     ApiJson(req): ApiJson<DenyDeviceRequest>,
 ) -> AppResult<Json<DenyDeviceResponse>> {
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     let invalid = || AppError::bad_request("invalid or expired token");
     let hash = crypto::presented_token_hash(TokenKind::DenyDevice, req.token.expose_secret())
         .ok_or_else(invalid)?;

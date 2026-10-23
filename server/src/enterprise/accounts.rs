@@ -346,23 +346,26 @@ pub async fn complete_login(
         return Err(refuse(state, Some(user_id), ip, method, Refusal::AccountDisabled).await);
     }
     let device_id = device.device_id;
+    let quota = state.rate.quotas(&state.db, &state.config, user_id).await?;
     let mut tx = state.db.begin().await?;
-    let outcome = match devices::register_or_match(&mut tx, user_id, device, device_proof).await {
-        Ok(o) => o,
-        Err(err) => {
-            drop(tx);
-            if err.code() == ErrorCode::InvalidProof {
-                AuditEvent::new(AuditType::DeviceProofFailed)
-                    .user(user_id)
-                    .device(device_id)
-                    .ip(ip)
-                    .meta(serde_json::json!({ "method": method }))
-                    .record(&state.db)
-                    .await?;
+    let outcome =
+        match devices::register_or_match(&mut tx, user_id, device, device_proof, &quota).await {
+            Ok(o) => o,
+            Err(err) => {
+                drop(tx);
+                crate::auth::handlers::audit_device_quota(state, user_id, &err);
+                if err.code() == ErrorCode::InvalidProof {
+                    AuditEvent::new(AuditType::DeviceProofFailed)
+                        .user(user_id)
+                        .device(device_id)
+                        .ip(ip)
+                        .meta(serde_json::json!({ "method": method }))
+                        .record(&state.db)
+                        .await?;
+                }
+                return Err(err);
             }
-            return Err(err);
-        }
-    };
+        };
     // The device that opens a brand-new account is the owner's by
     // definition: like at registration it never starts in quarantine.
     let first_device = outcome == DeviceOutcome::Created && {

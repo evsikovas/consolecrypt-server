@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- Protocol 1.11 (server 0.2.2, additive): **quotas and request limits**
+  (security audit S2). No new types or error codes; `cc_protocol::quotas`
+  names the `details` values.
+  - `429 rate_limited` now also carries `details.limit` naming the limit
+    (`cc_protocol::quotas::limit`: `push_device`, `push_account`,
+    `mutations_account`, `unknown_delete_account`, `share_write_account`,
+    `share_revision_account`, `recipient_lookup_account`,
+    `enrollment_account`, `trust_request_device`, `trust_request_account`,
+    `verification_account`, `account_security`, `ws_connect_account`,
+    `ws_connections`, `auth_ip`, `login_email`, `login_email_total`,
+    `recovery_email`, `proof_device`, `read_device`); unknown values must be
+    tolerated. Every `429` has `retry_after_seconds` and `Retry-After`.
+    Clients retry pushes, WebSocket connects and other requests no earlier
+    than `Retry-After` and never mark mutations failed on `429` (only on
+    `400`/`413`).
+  - Vault quotas: `413 payload_too_large` with `details.reason =
+    "object_limit"` (`details.limit`: live objects + tombstones per vault)
+    besides `"vault_quota"` (`details.limit_bytes`; tombstones now count a
+    fixed size each). Deleting a live object is always accepted.
+  - Device quotas at sign-in (password, OIDC, LDAP, registration):
+    `403 forbidden` with `details.reason = "device_limit"` (`limit` active
+    devices) or `"device_daily_limit"` (`limit` new devices per 24 h,
+    `until`). No session is issued; known devices are unaffected.
+  - Push: a `Delete` of an object the vault never had (`base_revision` 0) is
+    answered `Accepted { revision: 1, sequence: <current latest_sequence>,
+    replayed: false }` without creating a tombstone, a sequence or an event;
+    a replay of the same mutation answers the same with `replayed: true`.
+    Such objects never appear in pull. (Servers with
+    `CC_QUOTAS_V2_ENABLED=false` keep creating the tombstone.)
+  - Sign-in limits count failed attempts only, per e-mail and client network
+    (IPv4 /24, IPv6 /64) and per e-mail overall; a login with a valid, unused
+    `device_proof` of an active device of the account is not held back by
+    the e-mail limits. Account recovery requests are limited per e-mail and
+    network; the answer stays `202`.
+  - Migration `0013_quotas_limits`.
+
 - Protocol 1.10 (2026-10-22, server 0.2.1, additive): **teams**, advertised as
   `capabilities.teams` in `/v1/meta` (`CC_TEAMS_ENABLED`, default on).
   - A team is a vault of kind `team` (`/v1/vaults` keeps listing personal
