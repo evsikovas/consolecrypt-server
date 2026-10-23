@@ -37,7 +37,7 @@ services:
     logging: *logging
 
   server:
-    image: ${CC_SERVER_IMAGE:-ghcr.io/evsikovas/consolecrypt-server:${CC_SERVER_VERSION:-0.2.1}}
+    image: ${CC_SERVER_IMAGE:-ghcr.io/evsikovas/consolecrypt-server:${CC_SERVER_VERSION:-0.2.2}}
     restart: unless-stopped
     depends_on:
       postgres:
