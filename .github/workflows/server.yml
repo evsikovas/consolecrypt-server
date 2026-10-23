@@ -287,3 +287,28 @@ jobs:
           PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
           PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: python3 server/scripts/deploy_ssh.py
+
+  announce:
+    name: Announce the release in Telegram
+    needs: [release, release_object, deploy]
+    # After publication; after a successful deploy when one ran (a skipped
+    # deploy — no production configuration — still announces).
+    if: always() && needs.release_object.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_PROXY: ${{ secrets.TELEGRAM_PROXY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.release.outputs.revision }}
+          persist-credentials: false
+      - name: Announce the release in Telegram
+        if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
+        run: python3 server/scripts/announce-telegram.py --tag "$GITHUB_REF_NAME" --lang ru
