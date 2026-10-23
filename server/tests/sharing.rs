@@ -65,7 +65,7 @@ async fn default_off_and_http_signed_lifecycle() {
     );
     assert_eq!(
         srv.get("/v1/meta", &owner.access).await.1["protocol_version"],
-        "1.10"
+        "1.11"
     );
 }
 #[tokio::test]

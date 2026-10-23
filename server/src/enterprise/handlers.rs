@@ -94,7 +94,7 @@ pub async fn oidc_start(
             "SSO sign-in is not enabled on this server.",
         );
     };
-    if let Err(e) = state.limits.check_auth_ip(ip) {
+    if let Err(e) = state.check_auth_ip(ip).await {
         return e.into_response();
     }
     let Ok(Query(q)) = query else {
@@ -359,7 +359,7 @@ pub async fn oidc_exchange(
     if state.enterprise.as_ref().and_then(|e| e.oidc()).is_none() {
         return Err(not_enabled(ProviderKind::Oidc));
     }
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     devices::validate_registration(&req.device)?;
     let invalid = |reason: &'static str| {
         AppError::invalid_credentials().with_details(serde_json::json!({ "reason": reason }))
@@ -423,7 +423,7 @@ pub async fn ldap_login(
         return Err(not_enabled(ProviderKind::Ldap));
     };
     let cfg = &ldap.cfg;
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     devices::validate_registration(&req.device)?;
     let login = req.login.trim();
     let password = &req.password;
@@ -438,10 +438,23 @@ pub async fn ldap_login(
         return Err(AppError::invalid_credentials());
     }
     let normalized = lockout::normalize_login(login);
-    state
-        .limits
-        .login_email
-        .check(&crate::util::email_key(&normalized))?;
+    // Failed attempts per login and client network, shared by replicas (S2):
+    // reserved here, given back after a successful bind.
+    let reserved = match state
+        .rate
+        .take(
+            &state,
+            None,
+            &[crate::limiter::Check::new(
+                crate::config::Limit::LoginEmail,
+                crate::limiter::Key::EmailNet(&normalized, ip),
+            )],
+        )
+        .await?
+    {
+        Ok(taken) => taken,
+        Err(refusal) => return Err(refusal.into_error()),
+    };
     let window = cfg.failure_window;
     let ip_key = ip.map(lockout::ip_key);
     if let Some(k) = &ip_key {
@@ -496,6 +509,7 @@ pub async fn ldap_login(
     }
     lockout::clear(&state.db, Scope::Login, &login_key).await?;
     lockout::clear(&state.db, Scope::User, &user_key).await?;
+    state.rate.refund(&state.db, reserved).await?;
     if user.disabled {
         return Err(refuse(&state, None, ip, "ldap", Refusal::AccountDisabled).await);
     }

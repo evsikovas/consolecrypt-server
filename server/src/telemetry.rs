@@ -125,6 +125,10 @@ pub fn install_metrics() -> anyhow::Result<PrometheusHandle> {
             ],
         )?
         .set_buckets_for_metric(
+            Matcher::Full("cc_rate_bucket_seconds".into()),
+            &[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25],
+        )?
+        .set_buckets_for_metric(
             Matcher::Full("cc_db_duration_seconds".into()),
             &[
                 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
@@ -169,6 +173,34 @@ fn describe() {
     describe_counter!(
         "cc_password_hasher_busy_total",
         "Argon2 requests shed with 503"
+    );
+    describe_counter!(
+        "cc_rate_limit_observed_total",
+        "Requests a limit would refuse in CC_RATE_LIMIT_MODE=observe"
+    );
+    describe_histogram!(
+        "cc_rate_bucket_seconds",
+        "Time to take tokens from the PostgreSQL request limits"
+    );
+    describe_counter!(
+        "cc_quota_rejected_total",
+        "Requests refused by a quota (vault_quota, object_limit, device_limit, device_daily_limit)"
+    );
+    describe_counter!(
+        "cc_sync_unknown_deletes_total",
+        "Deletes of objects the vault never had (answered without a tombstone)"
+    );
+    describe_gauge!(
+        "cc_tombstones_total",
+        "Tombstones of all vaults (maintenance pass)"
+    );
+    describe_counter!(
+        "cc_auth_known_device_bypass_total",
+        "Sign-ins of a known device let through while the e-mail limits were exhausted"
+    );
+    describe_counter!(
+        "cc_recovery_mail_suppressed_total",
+        "Recovery mails not sent: per-address daily ceiling from unknown networks"
     );
 }
 

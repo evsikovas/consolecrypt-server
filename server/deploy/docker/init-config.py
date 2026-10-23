@@ -13,8 +13,11 @@ import secrets
 import sys
 import warnings
 
-IMAGE = "ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978"
-SOURCE = "https://github.com/evsikovas/consolecrypt-server/tree/4dd3809cf5834ab2200f11462c54e868318c1b35"
+# Server release of this example (kept on server/Cargo.toml by
+# server/scripts/example_versions.py). The image is
+# ghcr.io/evsikovas/consolecrypt-server:VERSION unless IMAGE is set.
+VERSION = "0.2.1"
+IMAGE = None
 
 
 def quote(value):
@@ -57,8 +60,8 @@ def create(directory, domain, mail):
         "CC_HTTP_PORT": "8080",
         "CC_POSTGRES_ADMIN_PASSWORD": secrets.token_hex(32),
         "CC_DATABASE_PASSWORD": secrets.token_hex(32),
-        "CC_SERVER_IMAGE": IMAGE,
-        "CC_SOURCE_CODE_URL": SOURCE,
+        "CC_SERVER_VERSION": VERSION,
+        **({"CC_SERVER_IMAGE": IMAGE} if IMAGE else {}),
         "CC_RUN_MIGRATIONS": "true",
         "CC_REGISTRATION_OPEN": "true",
         **mail,

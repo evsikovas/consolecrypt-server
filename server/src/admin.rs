@@ -559,3 +559,169 @@ async fn publish_revoked(pool: &PgPool, user: UserId, revoked: &[cc_protocol::Se
             .await;
     }
 }
+
+/// `admin limits set --email … key=value…`: per-account overrides of request
+/// limits and quotas (running servers pick them up within 30 seconds).
+/// Returns the stored keys with their normalised values.
+pub async fn limits_set(
+    pool: &PgPool,
+    email: &str,
+    pairs: &[String],
+) -> anyhow::Result<Vec<(String, String)>> {
+    if pairs.is_empty() {
+        bail!("give at least one key=value (see `admin limits show`)");
+    }
+    let mut parsed = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        let (key, value) = pair
+            .split_once('=')
+            .with_context(|| format!("{pair:?}: expected key=value"))?;
+        let key = key.trim().to_ascii_lowercase();
+        let value = crate::limiter::parse_override(&key, value).map_err(|e| anyhow::anyhow!(e))?;
+        parsed.push((key, value));
+    }
+    let user = find_user(pool, email).await?;
+    let mut tx = pool.begin().await?;
+    for (key, value) in &parsed {
+        sqlx::query(
+            "INSERT INTO account_limits (user_id, key, value) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+        )
+        .bind(Uuid::from(user))
+        .bind(key)
+        .bind(value)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    AuditEvent::new(AuditType::AdminAction)
+        .user(user)
+        .meta(serde_json::json!({
+            "action": "limits_set",
+            "keys": parsed.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+        }))
+        .record(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(parsed
+        .into_iter()
+        .map(|(k, v)| {
+            let shown = crate::limiter::display_override(&k, v);
+            (k, shown)
+        })
+        .collect())
+}
+
+/// `admin limits reset --email … [key…]`: drop overrides (all without keys).
+pub async fn limits_reset(pool: &PgPool, email: &str, keys: &[String]) -> anyhow::Result<u64> {
+    let user = find_user(pool, email).await?;
+    let keys: Vec<String> = keys.iter().map(|k| k.trim().to_ascii_lowercase()).collect();
+    let n = sqlx::query(
+        "DELETE FROM account_limits
+          WHERE user_id = $1 AND (cardinality($2::text[]) = 0 OR key = ANY($2))",
+    )
+    .bind(Uuid::from(user))
+    .bind(&keys)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    AuditEvent::new(AuditType::AdminAction)
+        .user(user)
+        .meta(serde_json::json!({ "action": "limits_reset", "keys": keys, "removed": n }))
+        .record(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(n)
+}
+
+/// `admin limits show [--email …]`: the effective limits and quotas (of the
+/// account, with its overrides marked `*`) and their override keys.
+pub async fn limits_show(
+    pool: &PgPool,
+    config: &Config,
+    email: Option<&str>,
+) -> anyhow::Result<Vec<String>> {
+    use crate::config::limits::CATALOG;
+    use std::collections::HashMap;
+    let overrides: HashMap<String, f64> = match email {
+        Some(email) => {
+            let user = find_user(pool, email).await?;
+            sqlx::query_as::<_, (String, f64)>(
+                "SELECT key, value FROM account_limits WHERE user_id = $1 ORDER BY key",
+            )
+            .bind(Uuid::from(user))
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect()
+        }
+        None => HashMap::new(),
+    };
+    let rl = &config.rate_limits;
+    let mut out = vec![format!(
+        "request limits: {} (CC_RATE_LIMIT_ENABLED={}); sign-in limits always enforce",
+        match rl.mode {
+            crate::config::RateLimitMode::Enforce => "enforce",
+            crate::config::RateLimitMode::Observe => "observe",
+        },
+        rl.enabled
+    )];
+    let mark = |key: &str| if overrides.contains_key(key) { "*" } else { "" };
+    for d in CATALOG {
+        let mut spec = rl.limits.get(d.limit);
+        if !d.auth {
+            spec = spec.with_overrides(d.name, &overrides);
+        }
+        let n = d.name;
+        let per = |v: u32| {
+            if v == 0 {
+                "-".to_owned()
+            } else {
+                v.to_string()
+            }
+        };
+        out.push(format!(
+            "{n:<26} rate={}{} burst={}{} per_hour={}{} per_day={}{}{}",
+            if spec.rate > 0.0 {
+                crate::limiter::display_override(&format!("{n}_rate"), spec.rate)
+            } else {
+                "-".to_owned()
+            },
+            mark(&format!("{n}_rate")),
+            if spec.rate > 0.0 {
+                format!("{}", spec.burst.round() as i64)
+            } else {
+                "-".to_owned()
+            },
+            mark(&format!("{n}_burst")),
+            per(spec.per_hour),
+            mark(&format!("{n}_per_hour")),
+            per(spec.per_day),
+            mark(&format!("{n}_per_day")),
+            if d.auth {
+                "  (sign-in, not per account)"
+            } else {
+                ""
+            },
+        ));
+    }
+    let q = crate::limiter::effective_quotas(config, &overrides);
+    out.push(format!(
+        "quotas: CC_QUOTAS_V2_ENABLED={} tombstone_cost_bytes={}",
+        q.v2, q.tombstone_cost_bytes
+    ));
+    for (key, value) in [
+        ("max_vault_bytes", q.max_vault_bytes),
+        ("max_vault_objects", q.max_vault_objects),
+        ("max_devices_per_account", q.max_devices),
+        ("new_devices_per_account_per_day", q.new_devices_per_day),
+    ] {
+        out.push(format!("{key:<32} {value}{}", mark(key)));
+    }
+    out.push(
+        "override keys: <limit>_rate (N or N/min|hour|day), <limit>_burst, <limit>_per_hour, \
+         <limit>_per_day, and the quota names above"
+            .to_owned(),
+    );
+    Ok(out)
+}

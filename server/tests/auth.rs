@@ -8,6 +8,7 @@ mod common;
 use cc_protocol::auth::{AccountInfo, TokenPair};
 use cc_protocol::paths;
 use common::*;
+use consolecrypt_server::config::{Limit, LimitSpec};
 use consolecrypt_server::mail::MailKind;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -454,17 +455,24 @@ async fn registration_can_be_closed() {
 async fn auth_endpoints_are_rate_limited() {
     let srv = server!(|c| {
         c.rate_limits.enabled = true;
-        c.rate_limits.login_per_email_per_minute = 3;
+        c.rate_limits
+            .limits
+            .set(Limit::LoginEmail, LimitSpec::per_minute(3));
         c.rate_limits.auth_per_ip_per_minute = 1000;
     });
     let a = srv.new_account().await;
+    let stranger = TestDevice::new("stranger");
     let mut last = (StatusCode::OK, serde_json::Value::Null);
     for _ in 0..4 {
-        last = srv.login(&a.email, "wrong-password-xyz", &a.device).await;
+        last = srv.login(&a.email, "wrong-password-xyz", &stranger).await;
     }
     assert_eq!(last.0, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(last.1["code"], "rate_limited");
+    assert_eq!(last.1["details"]["limit"], "login_email");
     assert!(last.1["retry_after_seconds"].as_u64().unwrap() >= 1);
+    // The owner's known device is not held back by others' failures.
+    let (s, body) = srv.login(&a.email, &a.password, &a.device).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
 }
 
 async fn wait_for_token(srv: &TestServer, email: &str, kind: MailKind) -> String {
@@ -481,7 +489,15 @@ async fn wait_for_token(srv: &TestServer, email: &str, kind: MailKind) -> String
 async fn recovery_mail_is_rate_limited_per_email() {
     let srv = server!(|c| {
         c.rate_limits.enabled = true;
-        c.rate_limits.recovery_per_email_per_hour = 2;
+        c.rate_limits.limits.set(
+            Limit::RecoveryEmail,
+            LimitSpec {
+                rate: 2.0 / 3600.0,
+                burst: 2.0,
+                per_hour: 0,
+                per_day: 0,
+            },
+        );
         c.rate_limits.auth_per_ip_per_minute = 1000;
     });
     let a = srv.new_account().await;

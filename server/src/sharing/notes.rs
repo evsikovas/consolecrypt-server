@@ -178,6 +178,9 @@ async fn put_keys(
     ApiJson(set): ApiJson<SharedNotesKeySet>,
 ) -> AppResult<StatusCode> {
     enabled(&s)?;
+    s.rate
+        .account(&s, crate::config::Limit::ShareRevisionAccount, auth.user_id)
+        .await?;
     let message = notes_key_set_message(&set).map_err(invalid)?;
     let mut tx = s.db.begin().await?;
     let (row, manifest) = member_item(&s, &mut tx, &auth, id, true).await?;
@@ -258,6 +261,9 @@ async fn put_note(
     ApiJson(note): ApiJson<SharedNote>,
 ) -> AppResult<Json<SharedNote>> {
     enabled(&s)?;
+    s.rate
+        .account(&s, crate::config::Limit::ShareRevisionAccount, auth.user_id)
+        .await?;
     validate_note(&note).map_err(invalid)?;
     if note.note_id != note_id
         || note.author_user_id != auth.user_id
@@ -388,6 +394,9 @@ async fn rekey(
     ApiJson(req): ApiJson<RekeySharedNotesRequest>,
 ) -> AppResult<StatusCode> {
     enabled(&s)?;
+    s.rate
+        .account(&s, crate::config::Limit::ShareRevisionAccount, auth.user_id)
+        .await?;
     validate_rekey(&req).map_err(invalid)?;
     let mut tx = s.db.begin().await?;
     let (row, manifest) = member_item(&s, &mut tx, &auth, id, true).await?;

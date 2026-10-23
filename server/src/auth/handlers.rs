@@ -6,9 +6,11 @@
 use super::sessions::{self, AccountTokenPurpose};
 use super::AuthContext;
 use crate::audit::{AuditEvent, AuditType};
+use crate::config::Limit;
 use crate::devices::{self, protection, DeviceOutcome};
 use crate::error::{is_unique_violation, spawn_in_request, AppError, AppResult};
 use crate::extract::{ApiJson, ApiJsonOrDefault, ClientIp};
+use crate::limiter::{Check, Key, Taken};
 use crate::mail::{self, templates};
 use crate::state::AppState;
 use crate::util::{email_key, normalize_email, validate_account_password};
@@ -37,7 +39,7 @@ pub async fn register(
     if state.config.auth.is_enterprise() {
         return Err(crate::enterprise::enterprise_auth_required());
     }
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     if !state.config.registration_open {
         return Err(AppError::forbidden("registration is closed on this server"));
     }
@@ -66,7 +68,16 @@ pub async fn register(
             other?;
         }
     }
-    devices::register_or_match(&mut tx, user_id, &req.device, req.device_proof.as_ref()).await?;
+    // A new account has no overrides yet.
+    let quota = crate::limiter::effective_quotas(&state.config, &Default::default());
+    devices::register_or_match(
+        &mut tx,
+        user_id,
+        &req.device,
+        req.device_proof.as_ref(),
+        &quota,
+    )
+    .await?;
     // The device that creates the account is the owner's by definition: it
     // never starts in quarantine (device protection).
     sqlx::query("UPDATE devices SET quarantine_lifted_at = created_at WHERE id = $1")
@@ -135,6 +146,15 @@ struct LoginUserRow {
 }
 
 /// `POST /v1/auth/login` → `AuthResponse`
+///
+/// Sign-in limits (security audit S2, TR-7/TR-8), all shared by replicas:
+/// the client address (`auth_ip`), and *failed* attempts per e-mail and
+/// client network (`login_email`) and per e-mail from all networks
+/// (`login_email_total`). The e-mail budget is reserved before the password
+/// check and given back on success, so a successful sign-in costs nothing and
+/// concurrent attempts cannot overshoot. A known device of the account (a
+/// valid, unused login proof) is never held back by the e-mail limits:
+/// others' failures cannot lock the owner out.
 pub async fn login(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
@@ -143,21 +163,18 @@ pub async fn login(
     if state.config.auth.is_enterprise() {
         return Err(crate::enterprise::enterprise_auth_required());
     }
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     // Normalise first: the limiter key is then bounded (≤ 254 bytes) and a
     // malformed address (e.g. with NUL, which PostgreSQL rejects) can never
     // match an account — it is treated like an unknown user.
-    let email = normalize_email(&req.email).ok();
-    if let Some(e) = &email {
-        state.limits.login_email.check(&email_key(e))?;
-    }
+    let email = normalize_email(&req.email).ok().map(|e| email_key(&e));
     devices::validate_registration(&req.device)?;
     if req.password.expose_secret().len() > cc_protocol::limits::MAX_ACCOUNT_PASSWORD_LEN {
         return Err(AppError::invalid_credentials());
     }
 
     let user: Option<LoginUserRow> =
-        match email {
+        match &email {
             Some(email) => sqlx::query_as(
                 "SELECT id, password_hash, status, email_verified_at IS NOT NULL AS email_verified
                    FROM users WHERE lower(email) = lower($1)",
@@ -167,6 +184,33 @@ pub async fn login(
             .await?,
             None => None,
         };
+    let known_device = match (&user, &req.device_proof) {
+        (Some(u), Some(proof)) => {
+            devices::is_known_device(&state.db, u.id.into(), req.device.device_id, proof).await?
+        }
+        _ => false,
+    };
+    let mut reserved = Taken::default();
+    if let Some(key) = &email {
+        let checks = [
+            Check::new(Limit::LoginEmail, Key::EmailNet(key, ip)),
+            Check::new(Limit::LoginEmailTotal, Key::Email(key)),
+        ];
+        match state.rate.take(&state, None, &checks).await? {
+            Ok(taken) => reserved = taken,
+            Err(_) if known_device => {
+                metrics::counter!("cc_auth_known_device_bypass_total").increment(1);
+            }
+            Err(refusal) => {
+                if refusal.limit == Limit::LoginEmailTotal {
+                    if let Some(u) = &user {
+                        notify_failed_logins(&state, u.id.into(), ip);
+                    }
+                }
+                return Err(refusal.into_error());
+            }
+        }
+    }
 
     let ok = state
         .passwords
@@ -190,6 +234,8 @@ pub async fn login(
             return Err(AppError::invalid_credentials());
         }
     };
+    // A successful sign-in does not spend the e-mail limits.
+    state.rate.refund(&state.db, reserved).await?;
     let user_id = UserId::from(user.id);
     if user.status != "active" {
         return Err(AppError::forbidden("account disabled"));
@@ -202,26 +248,33 @@ pub async fn login(
     }
 
     let device_id = req.device.device_id;
+    let quota = state.rate.quotas(&state.db, &state.config, user_id).await?;
     let mut tx = state.db.begin().await?;
-    let outcome =
-        match devices::register_or_match(&mut tx, user_id, &req.device, req.device_proof.as_ref())
-            .await
-        {
-            Ok(o) => o,
-            Err(err) => {
-                drop(tx);
-                if err.code() == ErrorCode::InvalidProof {
-                    // Correct password but no proof for this device: suspicious.
-                    AuditEvent::new(AuditType::DeviceProofFailed)
-                        .user(user_id)
-                        .device(device_id)
-                        .ip(ip)
-                        .record(&state.db)
-                        .await?;
-                }
-                return Err(err);
+    let outcome = match devices::register_or_match(
+        &mut tx,
+        user_id,
+        &req.device,
+        req.device_proof.as_ref(),
+        &quota,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(err) => {
+            drop(tx);
+            audit_device_quota(&state, user_id, &err);
+            if err.code() == ErrorCode::InvalidProof {
+                // Correct password but no proof for this device: suspicious.
+                AuditEvent::new(AuditType::DeviceProofFailed)
+                    .user(user_id)
+                    .device(device_id)
+                    .ip(ip)
+                    .record(&state.db)
+                    .await?;
             }
-        };
+            return Err(err);
+        }
+    };
     let tokens = sessions::create_session(&mut tx, &state.config, user_id, device_id).await?;
     AuditEvent::new(AuditType::Login)
         .user(user_id)
@@ -254,6 +307,64 @@ pub async fn login(
         email_verified: user.email_verified,
         tokens,
     }))
+}
+
+/// Audit a device quota refusal (at most hourly per account and reason).
+pub(crate) fn audit_device_quota(state: &AppState, user_id: UserId, err: &AppError) {
+    use cc_protocol::quotas::reason;
+    match err.detail("reason").and_then(|v| v.as_str()) {
+        Some(reason::DEVICE_LIMIT) => state.rate.audit_quota(state, user_id, reason::DEVICE_LIMIT),
+        Some(reason::DEVICE_DAILY_LIMIT) => {
+            state
+                .rate
+                .audit_quota(state, user_id, reason::DEVICE_DAILY_LIMIT)
+        }
+        _ => {}
+    }
+}
+
+/// TR-8: the per-e-mail limit of all networks refused a sign-in of an
+/// existing account — tell the owner, at most once a UTC day (all replicas),
+/// with a `limit_exceeded` audit event. Runs in the background.
+fn notify_failed_logins(state: &AppState, user_id: UserId, ip: Option<IpAddr>) {
+    let state = state.clone();
+    spawn_in_request(async move {
+        let result = async {
+            let mut tx = state.db.begin().await?;
+            let (count, _) = protection::bump(
+                &mut tx,
+                "failed_login_notice",
+                Uuid::from(user_id),
+                protection::Window::Day,
+            )
+            .await?;
+            if count != 1 {
+                return AppResult::Ok(());
+            }
+            AuditEvent::new(AuditType::LimitExceeded)
+                .user(user_id)
+                .ip(ip)
+                .meta(serde_json::json!({ "limit": Limit::LoginEmailTotal.name() }))
+                .record(&mut *tx)
+                .await?;
+            let email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+                .bind(Uuid::from(user_id))
+                .fetch_one(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            if state.mailer.delivers() {
+                mail::send_in_background(
+                    state.mailer.clone(),
+                    templates::failed_logins(&email, state.config.public_url.as_deref()),
+                );
+            }
+            AppResult::Ok(())
+        }
+        .await;
+        if let Err(err) = result {
+            tracing::warn!(code = ?err.code(), "failed-login notice failed");
+        }
+    });
 }
 
 /// `POST /v1/auth/refresh` → `TokenPair`
@@ -408,7 +519,7 @@ pub async fn forgot_password(
     if state.config.auth.is_enterprise() {
         return Err(crate::enterprise::enterprise_auth_required());
     }
-    start_password_reset(state, ip, req, false)
+    start_password_reset(state, ip, req, false).await
 }
 
 /// `POST /v1/recovery/account/start` → `202` (always). Account access only —
@@ -421,23 +532,35 @@ pub async fn recovery_start(
     if state.config.auth.is_enterprise() {
         return Err(crate::enterprise::enterprise_auth_required());
     }
-    start_password_reset(state, ip, req, true)
+    start_password_reset(state, ip, req, true).await
 }
 
-fn start_password_reset(
+/// TR-8: requests are limited per e-mail *and client network*
+/// (`recovery_email`), keyed on the input so a `429` reveals nothing about
+/// account existence; others' requests from other networks never block the
+/// owner. The per-e-mail ceiling of all networks (`recovery_email_total`)
+/// only stops *mails* (the answer stays `202`), and requests from a network
+/// the owner signed in from recently are exempt from it.
+async fn start_password_reset(
     state: AppState,
     ip: Option<IpAddr>,
     req: ForgotPasswordRequest,
     recovery: bool,
 ) -> AppResult<StatusCode> {
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     // Malformed input still gets the same 202 (no account can match it).
     let Ok(email) = normalize_email(&req.email) else {
         return Ok(StatusCode::ACCEPTED);
     };
     let key = email_key(&email);
-    // Keyed on the *input*, so a 429 reveals nothing about account existence.
-    state.limits.recovery_email.check(&key)?;
+    state
+        .rate
+        .check(
+            &state,
+            None,
+            &[Check::new(Limit::RecoveryEmail, Key::EmailNet(&key, ip))],
+        )
+        .await?;
     metrics::counter!("cc_recovery_attempts_total", "kind" => if recovery { "account_start" } else { "password_forgot" })
         .increment(1);
     // The rest runs in the background so response time does not depend on
@@ -466,6 +589,19 @@ async fn issue_password_reset(
     let Some((user_id, email)) = user else {
         return Ok(());
     };
+    let total = [Check::new(Limit::RecoveryEmailTotal, Key::Email(email_key))];
+    if state.rate.take(state, None, &total).await?.is_err()
+        && !known_network(state, user_id, ip).await?
+    {
+        metrics::counter!("cc_recovery_mail_suppressed_total").increment(1);
+        state.rate.audit(
+            state,
+            user_id.into(),
+            Limit::RecoveryEmailTotal.name(),
+            true,
+        );
+        return Ok(());
+    }
     let mut tx = state.db.begin().await?;
     let token = sessions::issue_account_token(
         &mut tx,
@@ -494,6 +630,29 @@ async fn issue_password_reset(
         ))
         .await?;
     Ok(())
+}
+
+/// Whether the account signed in from the network of `ip` (IPv4 /24, IPv6
+/// /64) in the last 90 days, according to the audit trail.
+async fn known_network(state: &AppState, user_id: Uuid, ip: Option<IpAddr>) -> AppResult<bool> {
+    let Some(ip) = ip else {
+        return Ok(false);
+    };
+    let net = crate::ratelimit::subnet_key(ip);
+    let seen: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT ip_address FROM audit_events
+          WHERE user_id = $1 AND event_type IN ('login', 'register')
+            AND occurred_at > now() - interval '90 days'
+          ORDER BY occurred_at DESC LIMIT 200",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(seen
+        .iter()
+        .flatten()
+        .filter_map(|s| s.parse::<IpAddr>().ok())
+        .any(|a| crate::ratelimit::subnet_key(a) == net))
 }
 
 /// `POST /v1/auth/password/reset` → `204`
@@ -531,7 +690,7 @@ async fn complete_password_reset(
     req: ResetPasswordRequest,
     recovery: bool,
 ) -> AppResult<StatusCode> {
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     validate_account_password(&req.new_password)?;
     // Cheap token check first so garbage tokens never cost an Argon2 hash.
     sessions::check_account_token(&state.db, &req.token, AccountTokenPurpose::PasswordReset)
@@ -652,6 +811,10 @@ pub async fn change_password(
         .limits
         .proof_device
         .check(&Uuid::from(auth.device_id))?;
+    state
+        .rate
+        .account(&state, Limit::AccountSecurity, auth.user_id)
+        .await?;
     validate_account_password(&req.new_password)?;
     let (current_hash, email): (Option<String>, String) =
         sqlx::query_as("SELECT password_hash, email FROM users WHERE id = $1")
@@ -747,7 +910,7 @@ pub async fn verify_email(
     if state.config.auth.is_enterprise() {
         return Err(crate::enterprise::enterprise_auth_required());
     }
-    state.limits.check_auth_ip(ip)?;
+    state.check_auth_ip(ip).await?;
     let mut tx = state.db.begin().await?;
     let user_id =
         sessions::consume_account_token(&mut tx, &req.token, AccountTokenPurpose::EmailVerify)

@@ -32,6 +32,7 @@ pub enum MailKind {
     EnvelopeAbuse,
     PasswordResetCompleted,
     TeamInvitation,
+    FailedLogins,
 }
 
 impl MailKind {
@@ -46,6 +47,7 @@ impl MailKind {
             MailKind::EnvelopeAbuse => "envelope_abuse",
             MailKind::PasswordResetCompleted => "password_reset_completed",
             MailKind::TeamInvitation => "team_invitation",
+            MailKind::FailedLogins => "failed_logins",
         }
     }
 }
@@ -308,6 +310,30 @@ pub mod templates {
                  ключ восстановления или доверенное устройство.\n\n\
                  Если вы не запрашивали восстановление, проигнорируйте это письмо.{}{}",
                 if recovery { String::new() } else { account_link(public_url, "reset", token) },
+                footer(public_url)
+            ),
+        }
+    }
+
+    /// Many failed sign-ins to the account from many networks (security
+    /// audit S2, TR-8); at most one a day.
+    pub fn failed_logins(to: &str, public_url: Option<&str>) -> MailMessage {
+        MailMessage {
+            kind: MailKind::FailedLogins,
+            to: to.to_owned(),
+            subject: "ConsoleCrypt — много неудачных попыток входа / Many failed sign-in attempts"
+                .to_owned(),
+            body: format!(
+                "Кто-то многократно пытается войти в ваш аккаунт ConsoleCrypt с неверным паролем. \
+                 Сервер временно ограничил попытки входа с новых устройств. Ваши устройства, \
+                 на которых вы уже входили, по-прежнему могут войти.\n\n\
+                 Если это были не вы, задайте длинный уникальный пароль аккаунта и проверьте \
+                 список устройств.\n\n\
+                 Someone is repeatedly trying to sign in to your ConsoleCrypt account with a wrong \
+                 password. The server has temporarily limited sign-ins from new devices; the \
+                 devices you already use can still sign in.\n\n\
+                 If this was not you, use a long unique account password and review your \
+                 devices.{}",
                 footer(public_url)
             ),
         }

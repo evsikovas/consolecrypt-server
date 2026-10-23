@@ -144,6 +144,9 @@ mod tests {
                 }
             }
         }
+        for key in super::super::limits::env_keys() {
+            assert!(keys::KEYS.contains(&key.as_str()), "{key} is not accepted");
+        }
     }
 
     #[test]

@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
 # Always supply the private server.env with --env-file. See docs/public/HOSTING.md.
+# The server release is CC_SERVER_VERSION (server.env, default below; the
+# release process keeps the default on the current release). CC_SERVER_IMAGE
+# overrides the whole reference, e.g. with an immutable @sha256 digest.
 name: consolecrypt-selfhost
 
 x-logging: &logging
@@ -34,7 +37,7 @@ services:
     logging: *logging
 
   server:
-    image: ${CC_SERVER_IMAGE:-ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978}
+    image: ${CC_SERVER_IMAGE:-ghcr.io/evsikovas/consolecrypt-server:${CC_SERVER_VERSION:-0.2.1}}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -47,7 +50,6 @@ services:
       CC_LISTEN_ADDR: 0.0.0.0:8080
       CC_METRICS_LISTEN: "off"
       CC_PUBLIC_URL: ""
-      CC_SOURCE_CODE_URL: ${CC_SOURCE_CODE_URL:-https://github.com/evsikovas/consolecrypt-server/tree/4dd3809cf5834ab2200f11462c54e868318c1b35}
       CC_REGISTRATION_OPEN: ${CC_REGISTRATION_OPEN:-true}
       CC_REQUIRE_EMAIL_VERIFICATION: "true"
       CC_REQUIRE_REQUEST_PROOF: "true"
@@ -72,6 +74,14 @@ services:
       CC_DEVICE_PROTECTION_ENABLED: ${CC_DEVICE_PROTECTION_ENABLED:-false}
       CC_NEW_DEVICE_MAIL_ENABLED: ${CC_NEW_DEVICE_MAIL_ENABLED:-true}
       CC_DEVICE_QUARANTINE_DAYS: ${CC_DEVICE_QUARANTINE_DAYS:-14}
+      CC_TEAMS_ENABLED: ${CC_TEAMS_ENABLED:-true}
+      # Server 0.2.2+: request limits (observe | enforce) and quotas.
+      CC_RATE_LIMIT_MODE: ${CC_RATE_LIMIT_MODE:-observe}
+      CC_QUOTAS_V2_ENABLED: ${CC_QUOTAS_V2_ENABLED:-true}
+      CC_MAX_DEVICES_PER_ACCOUNT: ${CC_MAX_DEVICES_PER_ACCOUNT:-20}
+      CC_MAX_VAULT_OBJECTS: ${CC_MAX_VAULT_OBJECTS:-100000}
+      # The image carries the exact source URL of its build (AGPL §13). Set
+      # CC_SOURCE_CODE_URL in an override file only for a modified build.
     ports:
       - "127.0.0.1:${CC_HTTP_PORT:-8080}:8080"
     networks: [database, frontend]

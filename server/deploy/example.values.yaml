@@ -1,7 +1,8 @@
 # Generic example only. Keep instance overrides and credentials outside Git.
 fullnameOverride: consolecrypt
 image:
-  tag: 0.1.9
+  # Tag = the chart appVersion (current server release); pin image.digest for
+  # reproducible installs.
   pullPolicy: IfNotPresent
 # Add imagePullSecrets when your registry requires authentication.
 config:

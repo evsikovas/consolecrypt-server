@@ -24,6 +24,7 @@ pub mod error;
 pub mod events;
 pub mod extract;
 pub mod jobs;
+pub mod limiter;
 pub mod mail;
 pub mod meta;
 pub mod middleware;

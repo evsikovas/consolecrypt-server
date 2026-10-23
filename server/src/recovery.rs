@@ -92,6 +92,11 @@ async fn replace(
     req: ReplaceEnvelopeRequest,
     recipient_type: RecipientType,
 ) -> AppResult<Json<KeyEnvelope>> {
+    // Password change, recovery kit re-issue, envelope replacement (S2).
+    state
+        .rate
+        .account(state, crate::config::Limit::AccountSecurity, auth.user_id)
+        .await?;
     envelopes::validate(&req.envelope, recipient_type)?;
     require_trusted_with_key(state, auth, ip, req.vault_id, &req.vault_access_key).await?;
 

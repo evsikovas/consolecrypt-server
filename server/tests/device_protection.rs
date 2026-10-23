@@ -73,7 +73,7 @@ async fn audit_count(srv: &TestServer, event_type: &str) -> i64 {
 async fn off_by_default_keeps_the_old_behaviour() {
     let srv = server!();
     let (_, meta) = srv.get(paths::META, "").await;
-    assert_eq!(meta["protocol_version"], "1.10");
+    assert_eq!(meta["protocol_version"], "1.11");
     assert_eq!(meta["capabilities"]["device_protection"], false);
     // Protocol 1.8: standard sign-in is advertised explicitly.
     assert_eq!(

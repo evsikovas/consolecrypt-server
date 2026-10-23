@@ -26,13 +26,25 @@ pub async fn events_ws(
     auth: AuthContext,
     ws: WebSocketUpgrade,
 ) -> Response {
+    // New connections per account, shared by all replicas (S2).
+    if let Err(err) = state
+        .rate
+        .account(&state, crate::config::Limit::WsConnectAccount, auth.user_id)
+        .await
+    {
+        return err.into_response();
+    }
     // Bound resources per account (per replica): a stolen token must not be
     // able to pin unbounded sockets.
     let Some(slot) = state
         .events
         .try_reserve_slot(auth.user_id, state.config.ws_max_connections_per_user)
     else {
-        return crate::error::AppError::rate_limited(10).into_response();
+        return crate::error::AppError::rate_limited(10)
+            .with_details(serde_json::json!({
+                cc_protocol::quotas::DETAILS_LIMIT: cc_protocol::quotas::limit::WS_CONNECTIONS,
+            }))
+            .into_response();
     };
     ws.max_message_size(MAX_CLIENT_MESSAGE)
         .max_frame_size(MAX_CLIENT_MESSAGE)

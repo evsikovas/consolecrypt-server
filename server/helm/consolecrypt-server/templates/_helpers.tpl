@@ -184,9 +184,16 @@ the server default applies. Integers are rendered without exponent notation.
   "CC_RATE_LIMIT_LOGIN_PER_EMAIL_PER_MINUTE" $c.rateLimit.loginPerEmailPerMinute
   "CC_RATE_LIMIT_RECOVERY_PER_EMAIL_PER_HOUR" $c.rateLimit.recoveryPerEmailPerHour
   "CC_RATE_LIMIT_PROOF_PER_DEVICE_PER_MINUTE" $c.rateLimit.proofPerDevicePerMinute
+  "CC_RATE_LIMIT_MODE" $c.rateLimit.mode
+  "CC_RATE_LIMIT_READ_PER_DEVICE_PER_MINUTE" $c.rateLimit.readPerDevicePerMinute
   "CC_SYNC_PAGE_BYTES" $c.sync.pageBytes
   "CC_MAX_VAULT_BYTES" $c.quotas.maxVaultBytes
   "CC_MAX_VAULTS_PER_ACCOUNT" $c.quotas.maxVaultsPerAccount
+  "CC_QUOTAS_V2_ENABLED" $c.quotas.v2Enabled
+  "CC_TOMBSTONE_COST_BYTES" $c.quotas.tombstoneCostBytes
+  "CC_MAX_VAULT_OBJECTS" $c.quotas.maxVaultObjects
+  "CC_MAX_DEVICES_PER_ACCOUNT" $c.quotas.maxDevicesPerAccount
+  "CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY" $c.quotas.newDevicesPerAccountPerDay
   "CC_WS_PING_INTERVAL_SECS" $c.websocket.pingIntervalSecs
   "CC_WS_SESSION_RECHECK_SECS" $c.websocket.sessionRecheckSecs
   "CC_WS_MAX_CONNECTIONS_PER_USER" $c.websocket.maxConnectionsPerUser
@@ -241,6 +248,13 @@ the server default applies. Integers are rendered without exponent notation.
 {{- $_ := set $env "CC_LDAP_MAX_FAILURES_PER_IP" $l.maxFailuresPerIp }}
 {{- $_ := set $env "CC_LDAP_BIND_PASSWORD_FILE" (printf "%s/%s" $dir $l.bindPasswordKey) }}
 {{- if $l.caKey }}{{- $_ := set $env "CC_LDAP_CA_FILE" (printf "%s/%s" $dir $l.caKey) }}{{- end }}
+{{- end }}
+{{- end }}
+{{- range $name, $l := ($c.rateLimit.limits | default dict) }}
+{{- if not (regexMatch "^[a-z_]+$" $name) }}{{- fail (printf "config.rateLimit.limits: invalid limit name %q" $name) }}{{- end }}
+{{- $p := printf "CC_LIMIT_%s" (upper $name) }}
+{{- range $field, $suffix := dict "rate" "_RATE" "burst" "_BURST" "perHour" "_PER_HOUR" "perDay" "_PER_DAY" }}
+{{- if hasKey $l $field }}{{- $_ := set $env (printf "%s%s" $p $suffix) (get $l $field) }}{{- end }}
 {{- end }}
 {{- end }}
 {{- if eq .Values.mail.transport "smtp" }}

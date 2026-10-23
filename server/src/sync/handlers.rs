@@ -5,8 +5,10 @@
 
 use crate::audit::{AuditEvent, AuditType};
 use crate::auth::AuthContext;
+use crate::config::Limit;
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiQuery, ClientIp};
+use crate::limiter::{Check, Key};
 use crate::state::AppState;
 use crate::vaults::VaultAccess;
 use axum::extract::State;
@@ -14,6 +16,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use cc_protocol::events::ServerEvent;
 use cc_protocol::limits;
+use cc_protocol::quotas::reason;
 use cc_protocol::sync::{
     Change, ChangesQuery, ChangesResponse, EncryptedBody, Mutation, MutationOp, MutationResult,
     PushRequest, PushResponse, SnapshotQuery, SnapshotResponse, OBJECT_FORMAT_V1,
@@ -90,6 +93,20 @@ struct CurrentObject {
 }
 
 /// `POST /v1/sync/push` → `200`/`409` `PushResponse` (ADR-0003 §Push).
+///
+/// Quotas (security audit S2; with `CC_QUOTAS_V2_ENABLED`):
+/// * a Delete of an object the vault never had (no row, `base_revision` 0)
+///   is answered `Accepted { revision: 1, sequence: <current> }` and recorded
+///   for idempotent replay only: no row, no sequence, no event (TR-1,
+///   ADR-0202 amendment; tombstones are never compacted, so no device can
+///   need one for an object the server never stored);
+/// * tombstones cost `CC_TOMBSTONE_COST_BYTES` against the byte quota and
+///   live objects + tombstones are capped by `CC_MAX_VAULT_OBJECTS` (TR-2);
+///   deleting a live object is always accepted.
+///
+/// Request limits: `push_device`, `push_account`, `mutations_account` (cost
+/// = mutations) before anything else, `unknown_delete_account` for TR-1
+/// deletes.
 pub async fn push(
     State(state): State<AppState>,
     auth: AuthContext,
@@ -102,6 +119,20 @@ pub async fn push(
         ));
     }
     validate_push(&req)?;
+    let mutation_count = u32::try_from(req.mutations.len()).unwrap_or(u32::MAX);
+    state
+        .rate
+        .check(
+            &state,
+            Some(auth.user_id),
+            &[
+                Check::new(Limit::PushDevice, Key::Device(auth.device_id)),
+                Check::new(Limit::PushAccount, Key::Account(auth.user_id)),
+                Check::new(Limit::MutationsAccount, Key::Account(auth.user_id))
+                    .cost(mutation_count),
+            ],
+        )
+        .await?;
     let vault_id = req.vault_id;
     let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
     access.require_trusted()?;
@@ -110,12 +141,18 @@ pub async fn push(
         return Err(AppError::forbidden("viewers cannot change team resources")
             .with_details(serde_json::json!({"reason": "team_role"})));
     }
+    // Quotas belong to the vault's owner (team vaults: the team owner).
+    let quota = state
+        .rate
+        .quotas(&state.db, &state.config, access.owner_user_id)
+        .await?;
 
     let db_timer = crate::db::DbTimer::start("sync_push");
     let mut tx = state.db.begin().await?;
     // Serialise pushes per vault; everything below sees a stable vault.
-    let locked: Option<(i64, i64)> = sqlx::query_as(
-        "SELECT s.last_sequence, s.stored_bytes FROM vault_sequences s
+    let locked: Option<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT s.last_sequence, s.stored_bytes, s.object_count, s.tombstone_count
+           FROM vault_sequences s
            JOIN vaults v ON v.id = s.vault_id AND v.state = 'active'
           WHERE s.vault_id = $1
           FOR UPDATE OF s",
@@ -123,7 +160,7 @@ pub async fn push(
     .bind(Uuid::from(vault_id))
     .fetch_optional(&mut *tx)
     .await?;
-    let (last_sequence, stored_bytes) =
+    let (last_sequence, stored_bytes, object_count, tombstone_count) =
         locked.ok_or_else(|| AppError::gone("vault was deleted"))?;
     // Re-check trust under the lock (a concurrent revocation wins).
     let still_trusted: bool = sqlx::query_scalar(
@@ -182,8 +219,10 @@ pub async fn push(
 
     let mut sequence = last_sequence;
     let mut stored = stored_bytes;
+    let (mut objects, mut tombstones) = (object_count, tombstone_count);
     let mut results = Vec::with_capacity(req.mutations.len());
     let (mut accepted, mut conflicts, mut replays) = (0u32, 0u32, 0u32);
+    let mut unknown_deletes = 0u32;
     for m in &req.mutations {
         if let Some(s) = replayed.get(&Uuid::from(m.mutation_id)) {
             replays += 1;
@@ -209,21 +248,60 @@ pub async fn push(
             });
             continue;
         }
+        let deleting = matches!(m.op, MutationOp::Delete);
+        if deleting && cur.is_none() && quota.v2 {
+            // TR-1: nothing to delete. Recorded for replay only.
+            record_mutation(&mut tx, vault_id, auth.device_id, m, 1, sequence).await?;
+            unknown_deletes += 1;
+            accepted += 1;
+            results.push(MutationResult::Accepted {
+                mutation_id: m.mutation_id,
+                object_id: m.object_id,
+                revision: 1,
+                sequence,
+                replayed: false,
+            });
+            continue;
+        }
         let new_size = match &m.op {
             MutationOp::Put { body } => body.ciphertext.len() as i64,
             MutationOp::Delete => 0,
         };
         stored += new_size - cur.map_or(0, |c| c.size);
-        if stored > state.config.max_vault_bytes && new_size > 0 {
-            // Whole request rejected; nothing of it is committed.
-            return Err(
-                AppError::payload_too_large("vault storage quota exceeded").with_details(
+        if cur.is_none() {
+            objects += 1;
+        }
+        tombstones += i64::from(deleting) - i64::from(cur.is_some_and(|c| c.deleted));
+        // Deletes always pass (they free space); the whole request is
+        // refused otherwise and nothing of it is committed.
+        if !deleting {
+            let used = if quota.v2 {
+                stored.saturating_add(tombstones.saturating_mul(quota.tombstone_cost_bytes))
+            } else {
+                stored
+            };
+            if used > quota.max_vault_bytes {
+                return Err(quota_refused(
+                    &state,
+                    access.owner_user_id,
+                    "vault storage quota exceeded",
                     serde_json::json!({
-                        "reason": "vault_quota",
-                        "limit_bytes": state.config.max_vault_bytes,
+                        "reason": reason::VAULT_QUOTA,
+                        "limit_bytes": quota.max_vault_bytes,
                     }),
-                ),
-            );
+                ));
+            }
+            if quota.v2 && cur.is_none() && objects > quota.max_vault_objects {
+                return Err(quota_refused(
+                    &state,
+                    access.owner_user_id,
+                    "vault object limit reached",
+                    serde_json::json!({
+                        "reason": reason::OBJECT_LIMIT,
+                        "limit": quota.max_vault_objects,
+                    }),
+                ));
+            }
         }
         sequence += 1;
         let revision = m.base_revision + 1;
@@ -238,13 +316,31 @@ pub async fn push(
         });
     }
 
+    if unknown_deletes > 0 {
+        // Checked last: only now is it known which deletes were unknown.
+        state
+            .rate
+            .check(
+                &state,
+                Some(auth.user_id),
+                &[
+                    Check::new(Limit::UnknownDeleteAccount, Key::Account(auth.user_id))
+                        .cost(unknown_deletes),
+                ],
+            )
+            .await?;
+    }
     if sequence != last_sequence {
         sqlx::query(
-            "UPDATE vault_sequences SET last_sequence = $2, stored_bytes = $3 WHERE vault_id = $1",
+            "UPDATE vault_sequences
+                SET last_sequence = $2, stored_bytes = $3, object_count = $4, tombstone_count = $5
+              WHERE vault_id = $1",
         )
         .bind(Uuid::from(vault_id))
         .bind(sequence)
         .bind(stored.max(0))
+        .bind(objects.max(0))
+        .bind(tombstones.max(0))
         .execute(&mut *tx)
         .await?;
         sqlx::query("UPDATE vaults SET updated_at = now() WHERE id = $1")
@@ -262,6 +358,7 @@ pub async fn push(
                 "accepted": accepted,
                 "conflicts": conflicts,
                 "replayed": replays,
+                "unknown_deletes": unknown_deletes,
                 "sequence": sequence,
             }))
             .record(&mut *tx)
@@ -275,6 +372,7 @@ pub async fn push(
     metrics::counter!("cc_sync_push_mutations_total", "result" => "replayed")
         .increment(replays.into());
     metrics::counter!("cc_sync_conflicts_total").increment(conflicts.into());
+    metrics::counter!("cc_sync_unknown_deletes_total").increment(unknown_deletes.into());
     if sequence != last_sequence {
         state
             .events
@@ -339,6 +437,18 @@ async fn apply(
     .bind(Uuid::from(device_id))
     .execute(&mut *conn)
     .await?;
+    record_mutation(conn, vault_id, device_id, m, revision, sequence).await
+}
+
+/// Idempotency record of an accepted mutation (replays answer the same).
+async fn record_mutation(
+    conn: &mut sqlx::PgConnection,
+    vault_id: VaultId,
+    device_id: DeviceId,
+    m: &Mutation,
+    revision: i64,
+    sequence: i64,
+) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO sync_mutations
              (mutation_id, vault_id, object_id, device_id, result_revision, result_sequence)
@@ -353,6 +463,22 @@ async fn apply(
     .execute(conn)
     .await?;
     Ok(())
+}
+
+/// `413` for a refused quota, with metric and (hourly) audit event.
+fn quota_refused(
+    state: &AppState,
+    owner: cc_protocol::UserId,
+    message: &'static str,
+    details: serde_json::Value,
+) -> AppError {
+    let reason = match details["reason"].as_str() {
+        Some(reason::OBJECT_LIMIT) => reason::OBJECT_LIMIT,
+        _ => reason::VAULT_QUOTA,
+    };
+    metrics::counter!("cc_quota_rejected_total", "reason" => reason).increment(1);
+    state.rate.audit_quota(state, owner, reason);
+    AppError::payload_too_large(message).with_details(details)
 }
 
 #[derive(sqlx::FromRow)]

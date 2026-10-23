@@ -10,6 +10,27 @@
 в примерах нужно заменить своими. Все команды выполняются из корня исходников,
 если не указано иначе.
 
+Примеры закреплены за **текущим выпуском сервера** — той же версией, что в
+`server/Cargo.toml` ветки `main`. В Docker это одна переменная
+`CC_SERVER_VERSION`, в Helm — `appVersion` chart; при выпуске новой версии они
+меняются вместе с ней (проверяется в CI). Образ
+`ghcr.io/evsikovas/consolecrypt-server:<версия>` собран для `linux/amd64` и
+`linux/arm64`; опубликованный тег не перезаписывается. Для полностью
+воспроизводимой установки закрепите digest из файла `server-image.json`
+в GitHub Release нужной версии.
+
+Что умеет текущий сервер и как это включается:
+
+| Возможность | Настройка | По умолчанию |
+|---|---|---|
+| Синхронизация хранилищ, доверие устройств, подписи запросов | `CC_REQUIRE_REQUEST_PROOF` | включено |
+| [Защита от входа с нового устройства](#защита-от-входа-с-нового-устройства) | `CC_DEVICE_PROTECTION_ENABLED` | выключено |
+| [Совместный доступ](SHARING.md): хосты, группы, секреты, Kubernetes, базы данных | `CC_OBJECT_SHARING_ENABLED` и флаги типов | выключено |
+| [Общие заметки](#общие-заметки) к общим объектам | `CC_SHARED_NOTES_ENABLED` | выключено |
+| [Команды](#команды) (общие хранилища) | `CC_TEAMS_ENABLED` | включено |
+| [Enterprise-вход](ENTERPRISE.md) через IdP (OIDC) или Active Directory (LDAP) | `CC_AUTH_MODE=enterprise` | `standard` |
+| [Квоты и лимиты запросов](#квоты-и-лимиты-запросов) | `CC_QUOTAS_V2_ENABLED`, `CC_RATE_LIMIT_MODE` | квоты включены, лимиты в режиме `observe` |
+
 ## Docker Compose
 
 Установка на одном сервере без Kubernetes.
@@ -34,12 +55,18 @@ Caddy. Постоянные данные лежат в Docker volumes. Наст�
 
 ### Получите пример и создайте приватную конфигурацию
 
-Для Docker возьмите **текущую `main`**. Пример закреплён за проверенным серверным образом
-**0.1.12**, протокол **1.5**, для `linux/amd64` и `linux/arm64`:
+Для Docker возьмите **текущую `main`**. Генератор записывает в приватный
+`server.env` версию сервера примера, например:
 
 ```text
-ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978
+CC_SERVER_VERSION=0.2.1
 ```
+
+Compose берёт образ `ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION`.
+Вместо тега можно задать точный образ: `CC_SERVER_IMAGE=ghcr.io/evsikovas/consolecrypt-server@sha256:…`
+(digest из `server-image.json` в GitHub Release). Сервер сам сообщает в `/v1/meta`
+ссылку на исходники своей сборки; `CC_SOURCE_CODE_URL` нужен только для
+изменённой сборки (см. [LICENSING.md](LICENSING.md)).
 
 В отдельном терминале Bash:
 
@@ -131,7 +158,8 @@ curl --fail --silent --show-error "$CC_API_ORIGIN/readyz"
 curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
 ```
 
-Ожидаются `ok`, `ready`, `server_version: "0.1.12"` и `protocol_version: "1.5"`.
+Ожидаются `ok`, `ready`, `server_version`, равная `CC_SERVER_VERSION`, и
+`protocol_version` этого выпуска (например, `1.11` у сервера 0.2.2).
 Проверяйте HTTPS без `curl -k`, в том числе с другой машины. В клиенте создайте
 профиль с `https://sync.example.org` **без `/v1`**. Зарегистрируйтесь, проверьте
 доставку письма и подтвердите код через API, как описано в разделе 6 ниже.
@@ -215,8 +243,13 @@ cc_compose run --rm --no-deps server admin rotate-epoch --all
 ### Обновление и проверка примера
 
 Сначала сделайте и проверьте резервную копию. Сохраните прежние Compose-файлы,
-`server.env`, digest и исходники. Для новой версии меняют `CC_SERVER_IMAGE`
-на проверенный immutable digest и `CC_SOURCE_CODE_URL` на её исходники, затем:
+`server.env` и прежнее значение `CC_SERVER_VERSION`. Прочитайте
+[примечания к выпуску](https://github.com/evsikovas/consolecrypt-server/releases):
+новые миграции, флаги и значения по умолчанию. Обновите исходники примера
+(`git pull` в каталоге клона), затем в приватном `server.env` поменяйте
+`CC_SERVER_VERSION` на новую версию (или `CC_SERVER_IMAGE` — на её digest).
+Строку `CC_SOURCE_CODE_URL`, если её записал генератор прежних версий, удалите:
+образ сам сообщает свои исходники. Затем:
 
 ```sh
 cc_compose config --quiet
@@ -225,6 +258,22 @@ cc_compose up -d --wait --wait-timeout 180 server
 curl --fail --silent --show-error "$CC_API_ORIGIN/readyz"
 curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta"
 ```
+
+Свои настройки (enterprise-вход, лимиты, общие заметки и т. п.) держите не в
+`compose.yaml` из исходников, а в приватном `compose.override.yaml` рядом с
+`server.env`. Явный `-f` отключает автоматический поиск override-файла, поэтому
+подключите его в функции `cc_compose` вторым `-f`:
+
+```sh
+cc_compose() {
+  docker compose --env-file "$CC_INSTALL_DIR/server.env" \
+    -f "$CC_COMPOSE_FILE" -f "$CC_INSTALL_DIR/compose.override.yaml" \
+    --profile https "$@"
+}
+```
+
+Пути внутри override-файла указывайте абсолютными: относительные пути Compose
+отсчитывает от каталога первого файла, то есть от исходников.
 
 Не меняйте пароли, имя проекта или существующий volume. Проверьте SMTP и
 синхронизацию двух устройств. Миграции встроены в образ; смена образа назад
@@ -239,11 +288,15 @@ curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta"
 использует случайные loopback-порты и удаляет только свои контейнеры и volumes:
 
 ```sh
-docker pull ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978
+export CC_SERVER_VERSION=0.2.1   # версия примера (server/deploy/docker/.env.example)
+docker pull "ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION"
 docker pull postgres:16-alpine
 docker pull caddy:2-alpine
 python3 server/deploy/docker/verify.py
 ```
+
+Для проверки другого образа (например, собранного локально) передайте
+`--image <образ> --server-version <версия>`.
 
 Тест проверяет API, HTTPS с временным локальным CA (без отключения проверки
 сертификата), PostgreSQL role, backup/restore и сохранность после `down/up`.
@@ -259,40 +312,26 @@ SMTP-почты — эти проверки нужно выполнить для
 Пример рассчитан на Traefik и уже настроенный cert-manager с
 `ClusterIssuer/letsencrypt`. Chart не устанавливает эти компоненты.
 
-Проверенный комплект на 5 октября 2026 года:
-
-| Компонент | Версия |
-|---|---|
-| Сервер | `0.1.12` |
-| Протокол | `1.5` |
-| Helm chart | `0.1.14` |
-| PostgreSQL | `16` |
-| Архитектуры образа | `linux/amd64`, `linux/arm64` |
-
-Образ: `ghcr.io/evsikovas/consolecrypt-server:0.1.12-4dd3809cf583`.
-Для воспроизводимой установки используйте его digest:
-
-```text
-ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978
-```
-
-Получите актуальный chart 0.1.14 из `main`; его версия независима от версии
-бинарного файла сервера. Исходники самого образа закреплены ссылкой ниже:
+Получите chart из `main`. Его `appVersion` — текущий выпуск сервера, он же тег
+образа по умолчанию; версия самого chart независима от версии сервера.
+Образы собираются для `linux/amd64` и `linux/arm64`, база — PostgreSQL 16.
 
 ```sh
 git clone --branch main --single-branch https://github.com/evsikovas/consolecrypt-server.git
 cd consolecrypt-server
 helm show chart server/helm/consolecrypt-server
+export CC_SERVER_VERSION=0.2.1   # = appVersion из вывода выше
 ```
 
-При следующем обновлении меняйте digest и исходники chart согласованно.
+Для воспроизводимой установки закрепите `image.digest` из `server-image.json`
+GitHub Release этой версии (см. values ниже); digest имеет приоритет над тегом.
 Справочник параметров: [values.yaml](../../server/helm/consolecrypt-server/values.yaml).
 
 Образ можно предварительно проверить Docker-командами:
 
 ```sh
-docker pull ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978
-docker run --rm --network none ghcr.io/evsikovas/consolecrypt-server@sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978 --version
+docker pull "ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION"
+docker run --rm --network none "ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION" --version
 ```
 
 В репозитории также есть `server/docker-compose.yml`: это вариант для локальной
@@ -430,8 +469,9 @@ fullnameOverride: consolecrypt
 replicaCount: 1
 image:
   repository: ghcr.io/evsikovas/consolecrypt-server
-  tag: "0.1.12-4dd3809cf583"
-  digest: sha256:484846da8c47dabb8d04570b06a34e9ca059dee792ddace4d7ad1a44a409c978
+  # Пусто: тег = appVersion chart (текущий выпуск). Для воспроизводимости:
+  # digest: sha256:<digest из server-image.json этого выпуска>
+  digest: ""
   pullPolicy: IfNotPresent
 
 database:
@@ -442,7 +482,6 @@ postgresql:
 
 config:
   publicUrl: ""
-  sourceCodeUrl: https://github.com/evsikovas/consolecrypt-server/tree/4dd3809cf5834ab2200f11462c54e868318c1b35
   registrationOpen: true
   requireEmailVerification: true
   requireRequestProof: true
@@ -453,9 +492,15 @@ config:
   sharedSecretsEnabled: false
   sharedKubeContextsEnabled: false
   sharedDbConnectionsEnabled: false
+  sharedNotesEnabled: false
   sharingOwnerOnlineEnrollmentEnabled: false
   deviceProtection:
     enabled: false
+  rateLimit:
+    mode: observe          # через неделю наблюдения — enforce
+  quotas:
+    maxDevicesPerAccount: 20
+    maxVaultObjects: 100000
 
 mail:
   transport: smtp
@@ -551,8 +596,9 @@ curl --fail --silent --show-error "$CC_API_ORIGIN/readyz"
 curl --fail --silent --show-error "$CC_API_ORIGIN/v1/meta" | python3 -m json.tool
 ```
 
-Ожидаются HTTP 200, ответы `ok`, `ready` и JSON с `server_version: "0.1.12"`,
-`protocol_version: "1.5"` и выбранной `source_code_url`. Readiness проверяет
+Ожидаются HTTP 200, ответы `ok`, `ready` и JSON с `server_version`, равной
+`appVersion` chart (или версии закреплённого digest), `protocol_version` этого
+выпуска и `source_code_url` исходников сборки. Readiness проверяет
 соединение с базой; успешный ответ ещё не подтверждает доставку почты или
 синхронизацию. Не используйте `curl -k`: клиенту нужен доверенный сертификат.
 
@@ -621,7 +667,7 @@ cc_kubectl exec deployment/consolecrypt -- \
 можно закрыть регистрацию через `config.registrationOpen: false` и повторить
 `cc_helm upgrade` с полным приватным values-файлом.
 
-Все четыре возможности совместного доступа в примере выключены.
+Все возможности совместного доступа в примере выключены.
 Их включение — отдельное решение администратора после проверки совместимых
 клиентов. Для обычной синхронизации своих устройств они не нужны.
 
@@ -639,12 +685,14 @@ config:
   sharedSecretsEnabled: true
   sharedKubeContextsEnabled: true
   sharedDbConnectionsEnabled: true
+  sharedNotesEnabled: true
   sharingOwnerOnlineEnrollmentEnabled: true
 ```
 
 `objectSharingEnabled` включает основной механизм; остальные флаги отдельно
-разрешают общие группы, отдельные секреты и добавление новых собственных
-устройств получателя при участии владельца. Расширения требуют основной
+разрешают общие группы, отдельные секреты, подключения Kubernetes и баз данных,
+общие заметки и добавление новых собственных устройств получателя при участии
+владельца. Расширения требуют основной
 функции и обязательных подписей запросов. Включайте только нужные возможности;
 не заменяйте этим фрагментом весь values-файл.
 
@@ -723,10 +771,12 @@ cc_kubectl exec deployment/consolecrypt -- \
 
 ## 8. Обновление
 
-1. Сохраните предыдущие digest, chart и values; сделайте копию PostgreSQL
-   и проверьте возможность восстановления.
-2. Изучите миграции новой версии и совместимость отката. Закрепите новый
-   digest и исходники chart; обновите `sourceCodeUrl` на исходники этой сборки.
+1. Сохраните предыдущие chart, values и версию (или digest); сделайте копию
+   PostgreSQL и проверьте возможность восстановления.
+2. Изучите примечания к выпуску, миграции новой версии и совместимость отката.
+   Обновите исходники chart (`git pull`): его `appVersion` — новая версия
+   сервера. Если вы закрепляли `image.digest`, замените его digest новой
+   версии; `sourceCodeUrl` оставьте пустым (кроме изменённой сборки).
 3. Выполните `helm lint` и `helm template` с полным приватным values-файлом.
    Не меняйте DB Secret, имя базы, имя релиза или существующие PVC.
 4. Выполните ту же команду `cc_helm upgrade --install`, затем проверьте
@@ -828,7 +878,7 @@ Kubernetes. Отключение флага скрывает общий объе
 
 ### Enterprise-режим: вход через IdP или Active Directory
 
-Начиная с сервера 0.2.0 (протокол 1.8) `CC_AUTH_MODE=enterprise` (в Helm —
+Начиная с сервера 0.2.0 (протокол 1.9) `CC_AUTH_MODE=enterprise` (в Helm —
 блок `auth:`) переводит сервер на вход только через корпоративный источник
 учётных записей: IdP по OIDC (Entra ID, AD FS, Keycloak, Google Workspace, Okta,
 любой OIDC) или Active Directory / LDAP. Регистрация, вход и сброс по паролю
@@ -841,6 +891,133 @@ Kubernetes. Отключение флага скрывает общий объе
 Настройка, рецепты для Entra ID, AD FS 2016+, Keycloak, Google Workspace, Okta и
 AD по LDAPS, команды аварийного доступа и защита учёток AD от блокировки — в
 [ENTERPRISE.md](ENTERPRISE.md).
+
+### Команды
+
+Начиная с сервера 0.2.1 (протокол 1.10) аккаунты могут вести **общие хранилища
+команд** (`CC_TEAMS_ENABLED`, по умолчанию включено; объявляется в `/v1/meta`
+как `capabilities.teams`). Участник получает ключ хранилища через конверт,
+запечатанный на его ключ участника команды; сервер ничего не расшифровывает.
+Состав команды — подписанный журнал с цепочкой хэшей: сервер проверяет порядок,
+подписи и права автора, клиенты проверяют весь журнал сами.
+
+- Роли: владелец, администратор, редактор, наблюдатель. Наблюдатель не может
+  отправлять изменения (`403`, `details.reason = "team_role"`).
+- Приглашения по почте: ответ всегда `202` (сервер не раскрывает, есть ли
+  аккаунт), не больше 20 в час на команду, срок 7 дней. Приглашённый сверяет код
+  участника с пригласившим. Без SMTP приглашённый видит приглашение в приложении.
+- Удаление участника отзывает его доступ и требует смены ключа хранилища.
+- Лимиты: `CC_MAX_TEAMS_PER_ACCOUNT` (50 команд на аккаунт) и
+  `CC_MAX_TEAM_MEMBERS` (200 участников). В Helm эти ключи задаются через
+  `extraEnv`.
+- Работает в обоих режимах входа. Нужна миграция `0012_teams`; старые клиенты
+  команд не видят (`/v1/vaults` отдаёт только личные хранилища).
+
+Чтобы выключить команды, задайте `CC_TEAMS_ENABLED=false` (в Docker — в
+`server.env`, в Helm — `extraEnv`): маршруты `/v1/teams/*` ответят `404`,
+данные команд сохранятся.
+
+### Квоты и лимиты запросов
+
+Начиная с сервера 0.2.2 (протокол 1.11) один аккаунт или устройство не может
+исчерпать ресурсы сервера: строки базы, место, CPU, почту или чужие лимиты.
+
+**Квоты** (`CC_QUOTAS_V2_ENABLED`, по умолчанию `true`; `false` возвращает
+поведение 0.2.1):
+
+| Ключ | По умолчанию | Ответ при превышении |
+|---|---|---|
+| `CC_MAX_VAULT_BYTES` | 1 GiB | `413`, `details.reason = "vault_quota"`: шифротекст плюс надгробия |
+| `CC_TOMBSTONE_COST_BYTES` | 256 | столько байт квоты стоит каждое надгробие (удалённый объект) |
+| `CC_MAX_VAULT_OBJECTS` | 100 000 | `413`, `details.reason = "object_limit"`: живые объекты и надгробия |
+| `CC_MAX_DEVICES_PER_ACCOUNT` | 20 (не больше 64) | вход с нового устройства — `403`, `details.reason = "device_limit"` |
+| `CC_NEW_DEVICES_PER_ACCOUNT_PER_DAY` | 10 (0 — без ограничения) | `403`, `details.reason = "device_daily_limit"`, `details.until` |
+
+Удаление живого объекта принимается всегда, даже сверх квоты. Удаление объекта,
+которого на сервере никогда не было, больше не создаёт надгробие. Для предела
+устройств считаются неотозванные устройства: отзовите неиспользуемое на другом
+устройстве — и вход пройдёт. Уже известные устройства входят как обычно.
+Миграция `0013_quotas_limits` один раз пересчитывает число объектов и надгробий
+каждого хранилища (на больших базах это может занять время при старте).
+
+**Лимиты запросов** хранятся в PostgreSQL (token bucket, время базы) и одинаково
+действуют на любом числе реплик. При превышении — `429 rate_limited` с
+заголовком `Retry-After` и `details.limit`; клиент сам повторяет запрос позже.
+Чтения (pull, списки) ограничены только щедрым лимитом в памяти каждой реплики
+(`CC_RATE_LIMIT_READ_PER_DEVICE_PER_MINUTE`, 1200).
+
+`CC_RATE_LIMIT_MODE`:
+
+- `observe` (по умолчанию в 0.2.2) — запросы не отклоняются, превышения только
+  считаются в метрике `cc_rate_limit_observed_total{limiter}` и в журнале аудита
+  (`limit_exceeded`, не чаще раза в час на аккаунт и лимит);
+- `enforce` — превышения отклоняются с `429`.
+
+Порядок включения: обновите сервер, неделю понаблюдайте за
+`cc_rate_limit_observed_total`, при необходимости поднимите пороги, затем
+задайте `enforce`. Лимиты входа и восстановления действуют в обоих режимах.
+`CC_RATE_LIMIT_ENABLED=false` выключает все лимиты запросов, но не квоты.
+
+Каждый лимит настраивается ключами `CC_LIMIT_<ИМЯ>_RATE` (`N` в естественном
+периоде лимита или `N/min`, `N/hour`, `N/day`; `0` — без ограничения),
+`_BURST` (ёмкость, по умолчанию — один период), `_PER_HOUR` и `_PER_DAY`
+(дополнительные потолки). Например, `CC_LIMIT_PUSH_ACCOUNT_RATE=600/min`. В Helm —
+`config.rateLimit.limits: {push_account: {rate: "600/min", burst: 600}}`.
+
+| Имя | Что ограничено | По умолчанию |
+|---|---|---|
+| `push_device` | отправка изменений, на устройство | 120/мин, всплеск 60 |
+| `push_account` | отправка изменений, на аккаунт | 300/мин |
+| `mutations_account` | число изменений в отправках, на аккаунт | 50 000/час |
+| `unknown_delete_account` | удаление объектов, которых не было на сервере | 1000/сутки |
+| `share_write_account` | создание общих объектов | 60/час, всплеск 20 |
+| `share_revision_account` | ревизии общих объектов, смена доступа, общие заметки | 600/час |
+| `recipient_lookup_account` | поиск получателя по почте | 30/мин и 300/сутки |
+| `enrollment_account` | добавление собственных устройств получателя | 30/час |
+| `trust_request_device` / `trust_request_account` | запросы доверия устройства | 10/час на устройство, 30/сутки на аккаунт |
+| `verification_account` | сеансы сверки ключей | 20/час |
+| `account_security` | смена пароля, перевыпуск комплекта восстановления, замена конверта | 10/час |
+| `ws_connect_account` | новые WebSocket-подключения | 60/мин |
+| `auth_ip` | публичные запросы входа, регистрации и восстановления с одного адреса | 30/мин |
+| `login_email` | **неудачные** входы на почту из одной сети (/24 IPv4, /64 IPv6) | 10/мин и 50/час |
+| `login_email_total` | неудачные входы на почту из всех сетей | 200/час |
+| `recovery_email` | запросы сброса пароля на почту из одной сети | 5/час |
+| `recovery_email_total` | письма сброса на почту из всех сетей (ответ всегда `202`) | 20/сутки |
+
+Прежние ключи `CC_RATE_LIMIT_AUTH_PER_IP_PER_MINUTE`,
+`CC_RATE_LIMIT_LOGIN_PER_EMAIL_PER_MINUTE` и
+`CC_RATE_LIMIT_RECOVERY_PER_EMAIL_PER_HOUR` продолжают задавать `auth_ip`,
+`login_email` и `recovery_email`.
+
+Чужие попытки не блокируют владельца: успешный вход лимиты почты не тратит,
+а вход с **известного устройства** аккаунта (действующая подпись устройства)
+не ограничивается лимитами почты вовсе — только лимитом адреса. При срабатывании
+`login_email_total` владелец получает одно письмо в сутки «Много неудачных попыток
+входа». Письмо сброса пароля из сети, где владелец входил за последние 90 дней,
+отправляется и сверх `recovery_email_total`. Постоянной блокировки аккаунта нет.
+
+Переопределения для отдельного аккаунта (действуют без перезапуска, не позже
+чем через 30 секунд):
+
+```sh
+# Docker
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits show --email user@example.org
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits set \
+  --email user@example.org push_account_rate=600/min max_vault_objects=200000
+cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits reset --email user@example.org
+# Kubernetes
+cc_kubectl exec deployment/consolecrypt -- /usr/local/bin/consolecrypt-server admin limits show
+```
+
+Ключи переопределений — имена лимитов с суффиксами `_rate`, `_burst`,
+`_per_hour`, `_per_day` и квоты `max_vault_bytes`, `max_vault_objects`,
+`max_devices_per_account`, `new_devices_per_account_per_day`. Лимиты входа
+переопределить для аккаунта нельзя.
+
+Метрики: `cc_rate_limited_total{limiter}`, `cc_rate_limit_observed_total{limiter}`,
+`cc_rate_bucket_seconds` (время проверки), `cc_quota_rejected_total{reason}`,
+`cc_sync_unknown_deletes_total`, `cc_tombstones_total`,
+`cc_auth_known_device_bypass_total`, `cc_recovery_mail_suppressed_total`.
 
 ## Проверка зависимостей сервера
 

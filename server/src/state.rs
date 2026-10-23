@@ -25,6 +25,8 @@ pub struct Inner {
     pub events: Events,
     pub mailer: Arc<dyn Mailer>,
     pub limits: RateLimiters,
+    /// PostgreSQL-backed request limits and per-account overrides.
+    pub rate: crate::limiter::Limiter,
     pub passwords: PasswordHasher,
     /// Enterprise sign-in provider (`None` in standard mode), validated at
     /// startup (protocol 1.8).
@@ -60,6 +62,7 @@ impl AppState {
         let events = Events::start(config.event_bus, &db).await?;
         let state = AppState(Arc::new(Inner {
             limits: RateLimiters::new(&config.rate_limits),
+            rate: crate::limiter::Limiter::default(),
             passwords: PasswordHasher::new(&config.password_hashing)?,
             events,
             mailer,
@@ -75,6 +78,7 @@ impl AppState {
                 tick.tick().await;
                 let Some(inner) = weak.upgrade() else { break };
                 inner.limits.housekeeping();
+                inner.rate.housekeeping();
                 inner
                     .device_seen
                     .lock()
@@ -83,6 +87,20 @@ impl AppState {
             }
         });
         Ok(state)
+    }
+
+    /// Public auth endpoints: the in-memory first stage, then the per-IP
+    /// bucket shared by all replicas.
+    pub async fn check_auth_ip(&self, ip: Option<std::net::IpAddr>) -> crate::error::AppResult<()> {
+        use crate::limiter::{Check, Key};
+        self.limits.check_auth_ip(ip)?;
+        self.rate
+            .check(
+                self,
+                None,
+                &[Check::new(crate::config::Limit::AuthIp, Key::Ip(ip))],
+            )
+            .await
     }
 
     /// Whether `last_seen_at` of `device` should be written now.

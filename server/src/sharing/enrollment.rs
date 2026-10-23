@@ -243,6 +243,10 @@ pub async fn publish_grant(
     req: PublishOwnDevicesGrantRequest,
 ) -> AppResult<SignedSharingOwnDevicesGrantState> {
     require_enabled(state)?;
+    state
+        .rate
+        .account(state, crate::config::Limit::EnrollmentAccount, auth.user_id)
+        .await?;
     validate_signed_grant(&req.grant).map_err(invalid)?;
     let g = &req.grant.grant;
     if g.scope.share_id != id {
@@ -516,6 +520,10 @@ pub async fn submit_request(
     req: SubmitOwnDeviceRequest,
 ) -> AppResult<OwnDeviceRequestState> {
     require_enabled(state)?;
+    state
+        .rate
+        .account(state, crate::config::Limit::EnrollmentAccount, auth.user_id)
+        .await?;
     validate_submission(&req).map_err(invalid)?;
     let r = &req.request.request;
     if r.scope.share_id != id {
@@ -786,6 +794,10 @@ pub async fn publish_challenge(
     request: Uuid,
     req: PublishOwnDeviceChallengeRequest,
 ) -> AppResult<OwnDeviceRequestState> {
+    state
+        .rate
+        .account(state, crate::config::Limit::EnrollmentAccount, auth.user_id)
+        .await?;
     validate_signed_challenge(&req.challenge).map_err(invalid)?;
     let snapshot = snapshot_request(state, id, request).await?;
     let before = snapshot_grant(state, id, snapshot.grant_id).await?;
@@ -841,6 +853,10 @@ pub async fn submit_response(
     request: Uuid,
     req: SubmitOwnDeviceChallengeResponseRequest,
 ) -> AppResult<OwnDeviceRequestState> {
+    state
+        .rate
+        .account(state, crate::config::Limit::EnrollmentAccount, auth.user_id)
+        .await?;
     validate_signed_response(&req.response).map_err(invalid)?;
     let snapshot = snapshot_request(state, id, request).await?;
     let before = snapshot_grant(state, id, snapshot.grant_id).await?;
@@ -885,6 +901,10 @@ pub async fn accept_request(
     req: AcceptOwnDeviceRequest,
 ) -> AppResult<OwnDeviceAcceptanceResult> {
     require_enabled(state)?;
+    state
+        .rate
+        .account(state, crate::config::Limit::EnrollmentAccount, auth.user_id)
+        .await?;
     validate_accept_request(&req).map_err(invalid)?;
     enabled(state, &req.rotation.access.manifest)?;
     let mut tx = state.db.begin().await?;
