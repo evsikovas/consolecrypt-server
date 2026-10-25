@@ -117,9 +117,10 @@ pub async fn register(
         mail::send_in_background(
             state.mailer.clone(),
             templates::verify_email(
+                templates::Ctx::new(&state.config),
                 &email,
                 token.token.expose_secret(),
-                state.config.public_url.as_deref(),
+                state.config.email_verify_ttl,
             ),
         );
     }
@@ -355,7 +356,7 @@ fn notify_failed_logins(state: &AppState, user_id: UserId, ip: Option<IpAddr>) {
             if state.mailer.delivers() {
                 mail::send_in_background(
                     state.mailer.clone(),
-                    templates::failed_logins(&email, state.config.public_url.as_deref()),
+                    templates::failed_logins(templates::Ctx::new(&state.config), &email),
                 );
             }
             AppResult::Ok(())
@@ -623,10 +624,11 @@ async fn issue_password_reset(
     state
         .mailer
         .send(templates::password_reset(
+            templates::Ctx::new(&state.config),
             &email,
             token.token.expose_secret(),
             recovery,
-            state.config.public_url.as_deref(),
+            state.config.password_reset_ttl,
         ))
         .await?;
     Ok(())
@@ -785,10 +787,10 @@ async fn complete_password_reset(
         mail::send_in_background(
             state.mailer.clone(),
             templates::password_reset_completed(
+                templates::Ctx::new(&state.config),
                 &email,
                 &names,
                 token.token.expose_secret(),
-                state.config.public_url.as_deref(),
             ),
         );
     }
@@ -871,13 +873,13 @@ pub async fn change_password(
             let token =
                 protection::issue_deny_token(&mut tx, auth.user_id, Some(auth.device_id)).await?;
             templates::password_changed_new_device(
+                templates::Ctx::new(&state.config),
                 &email,
                 &name,
                 token.token.expose_secret(),
-                state.config.public_url.as_deref(),
             )
         }
-        None => templates::password_changed(&email, state.config.public_url.as_deref()),
+        None => templates::password_changed(templates::Ctx::new(&state.config), &email),
     };
     AuditEvent::new(AuditType::PasswordChanged)
         .user(auth.user_id)

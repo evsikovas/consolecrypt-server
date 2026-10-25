@@ -237,8 +237,14 @@ migrations:
 # Server settings (non-secret; rendered into a ConfigMap as CC_* variables).
 # Empty values ("") are omitted, so the server's built-in default applies.
 config:
-  # -- Public base URL of this instance, used in emails (CC_PUBLIC_URL).
+  # -- Public https URL where the account page <url>/account is served
+  # (CC_PUBLIC_URL): your website, or this server with webAccount=true. Mail
+  # then gets a button; empty: mail asks to paste the code into the app.
   publicUrl: ""
+  # -- Serve the built-in account page at /account (CC_WEB_ACCOUNT): confirm
+  # email, reset password with the mailed code, "This wasn't me". It only
+  # uses the public code-based endpoints. Off: the server stays API-only.
+  webAccount: false
   # -- AGPL-3.0 §13 source offer returned by GET /v1/meta (CC_SOURCE_CODE_URL).
   # Empty: the official image reports the exact source of its build. If you run
   # a MODIFIED server, point this at the source of your version.
@@ -277,8 +283,9 @@ config:
   sharedNotesEnabled: false
   sharingOwnerOnlineEnrollmentEnabled: false
   # -- New-device protection (server 0.1.16, protocol 1.7). Off by default.
-  # Deploy the web account page that handles `#action=deny-device` before
-  # turning it on: the "This wasn't me" links in the mails point there.
+  # Serve an account page that handles `#action=deny-device` (your website,
+  # or config.webAccount=true) before turning it on: the "This wasn't me"
+  # links in the mails point to config.publicUrl/account.
   deviceProtection:
     # -- CC_DEVICE_PROTECTION_ENABLED: quarantine of new devices, limits on
     # vault unlock material for untrusted devices, security mails, the
@@ -469,6 +476,8 @@ auth:
     caKey: ""
 
 mail:
+  # -- Language of outgoing mail and of the built-in account page: ru | en.
+  language: ru
   # -- disabled | smtp | file.
   #  * disabled (default): nothing is sent. Operators issue password-reset
   #    tokens with `consolecrypt-server admin reset-token --email …` (see NOTES).

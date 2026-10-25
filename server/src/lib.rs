@@ -37,6 +37,7 @@ pub mod teams;
 pub mod telemetry;
 pub mod util;
 pub mod vaults;
+pub mod web;
 
 pub use config::Config;
 pub use state::AppState;
@@ -60,6 +61,7 @@ pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 /// The complete HTTP application.
 pub fn build_router(state: AppState) -> Router {
+    let web_account = state.config.web_account;
     use auth::handlers as a;
     use devices::handlers as d;
     use sync::handlers as s;
@@ -172,6 +174,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(paths::ops::HEALTHZ, get(meta::healthz))
         .route(paths::ops::READYZ, get(meta::readyz))
         .merge(api)
+        .merge(if web_account {
+            web::routes()
+        } else {
+            Router::new()
+        })
         .fallback(middleware::not_found)
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -215,6 +222,15 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     if let Some(addr) = config.metrics_listen {
         let handle = telemetry::install_metrics()?;
         tokio::spawn(telemetry::serve_metrics(addr, handle, pool.clone()));
+    }
+    let mail_delivers = !matches!(config.mail.transport, config::MailTransport::Disabled);
+    if config.web_account && mail_delivers && config.public_url.is_none() {
+        tracing::warn!(
+            "CC_WEB_ACCOUNT=true but CC_PUBLIC_URL is not set: emails contain only a code. \
+             Set it to this server's public https URL so emails get a button to the built-in \
+             account page ({}).",
+            web::ACCOUNT_PATH
+        );
     }
     if !config.require_request_proof {
         tracing::warn!(

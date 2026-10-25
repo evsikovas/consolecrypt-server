@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 Alexander Evsikov <i@evsikov.net>
+
+  Built-in account page of the ConsoleCrypt sync server (/account, opt-in with
+  CC_WEB_ACCOUNT=true): confirm an email address, set a new account password
+  with the single-use codes the server mails, and answer "This wasn't me" links.
+  Nothing here can see or unlock vault data.
+-->
+<html lang="{{LANG}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow">
+  <title>ConsoleCrypt</title>
+  <link rel="stylesheet" href="/account/app.css">
+  <script src="/account/app.js" defer></script>
+</head>
+<body>
+  <main class="card" id="app" aria-live="polite">
+    <div class="brand">ConsoleCrypt</div>
+    <noscript>
+      <h1>JavaScript</h1>
+      <p>Enable JavaScript to use this page. Включите JavaScript, чтобы пользоваться этой страницей.</p>
+    </noscript>
+  </main>
+</body>
+</html>

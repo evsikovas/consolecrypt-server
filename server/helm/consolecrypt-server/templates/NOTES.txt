@@ -54,7 +54,9 @@ WARNING: a PodDisruptionBudget with a single replica blocks node drains.
 {{- end }}
 {{- if and (eq .Values.mail.transport "smtp") (not .Values.config.publicUrl) }}
 
-NOTE: config.publicUrl is empty; emails cannot contain links to this instance.
+NOTE: config.publicUrl is empty; emails contain only codes. Set it to the
+https URL of your account page (your website, or this server with
+config.webAccount=true) to add buttons to <url>/account.
 {{- end }}
 
 AGPL-3.0 §13: GET /v1/meta advertises {{ .Values.config.sourceCodeUrl | default "the upstream source URL" }}.

@@ -652,11 +652,11 @@ pub async fn invite(
         mail::send_in_background(
             state.mailer.clone(),
             mail::templates::team_invitation(
+                mail::templates::Ctx::new(&state.config),
                 &email,
                 inviter_email.as_deref().unwrap_or("—"),
                 &enum_str(&req.role),
                 note.as_deref(),
-                state.config.public_url.as_deref(),
             ),
         );
     }

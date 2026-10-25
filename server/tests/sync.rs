@@ -347,8 +347,31 @@ async fn validation_and_limits() {
             m
         })
         .collect();
-    let (status, _) = srv.push(&a, vault.id, big).await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let bytes = serde_json::to_vec(&json!({
+        "vault_id": vault.id,
+        "device_id": a.device.id,
+        "mutations": big,
+    }))
+    .unwrap();
+    let sent = srv
+        .signed(
+            srv.http.post(srv.url(paths::SYNC_PUSH)),
+            &a.access,
+            "POST",
+            paths::SYNC_PUSH,
+            &bytes,
+        )
+        .bearer_auth(&a.access)
+        .header("content-type", "application/json")
+        .body(bytes)
+        .send()
+        .await;
+    // The server may answer 413 and close the connection while the client is
+    // still writing the body; the client then sees a reset instead of 413.
+    match sent {
+        Ok(resp) => assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE),
+        Err(e) => assert!(e.is_request(), "{e}"),
+    }
     // Malformed JSON.
     let resp = srv
         .signed(

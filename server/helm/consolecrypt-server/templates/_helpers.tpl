@@ -147,6 +147,7 @@ the server default applies. Integers are rendered without exponent notation.
   "CC_RUN_MIGRATIONS" .Values.migrations.runAtStartup
   "CC_DATABASE_MAX_CONNECTIONS" .Values.database.maxConnections
   "CC_PUBLIC_URL" $c.publicUrl
+  "CC_WEB_ACCOUNT" $c.webAccount
   "CC_SOURCE_CODE_URL" $c.sourceCodeUrl
   "CC_REGISTRATION_OPEN" $c.registrationOpen
   "CC_REQUIRE_EMAIL_VERIFICATION" $c.requireEmailVerification
@@ -206,6 +207,7 @@ the server default applies. Integers are rendered without exponent notation.
   "CC_DATABASE_CONNECT_TIMEOUT_SECS" $.Values.database.connectTimeoutSecs
   "CC_MAIL_TRANSPORT" .Values.mail.transport
   "CC_MAIL_FROM" .Values.mail.from
+  "CC_MAIL_LANGUAGE" .Values.mail.language
 }}
 {{- $a := .Values.auth | default dict }}
 {{- if eq (toString $a.mode) "enterprise" }}

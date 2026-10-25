@@ -14,7 +14,8 @@
 
 use crate::config::{MailConfig, MailTransport, SmtpTls};
 use futures_util::future::BoxFuture;
-use lettre::message::{Mailbox, SinglePart};
+use lettre::message::header::{ContentTransferEncoding, ContentType};
+use lettre::message::{Body, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::fmt;
@@ -56,8 +57,10 @@ pub struct MailMessage {
     pub kind: MailKind,
     pub to: String,
     pub subject: String,
-    /// May contain a token. Never log.
+    /// Plain-text part. May contain a token. Never log.
     pub body: String,
+    /// HTML part (multipart/alternative). May contain a token. Never log.
+    pub html: Option<String>,
 }
 
 impl fmt::Debug for MailMessage {
@@ -65,6 +68,7 @@ impl fmt::Debug for MailMessage {
         f.debug_struct("MailMessage")
             .field("kind", &self.kind)
             .field("body", &"<redacted>")
+            .field("html", &self.html.as_ref().map(|_| "<redacted>"))
             .finish_non_exhaustive()
     }
 }
@@ -144,13 +148,27 @@ fn build_message(from: &Mailbox, msg: &MailMessage) -> anyhow::Result<Message> {
         .to
         .parse()
         .map_err(|_| anyhow::anyhow!("recipient is not a valid mailbox"))?;
-    Ok(Message::builder()
+    let builder = Message::builder()
         .from(from.clone())
         .to(to)
-        .subject(msg.subject.clone())
-        // Declare MIME 1.0 and text/plain; charset=utf-8, so mail clients
-        // decode Cyrillic instead of guessing a legacy charset.
-        .singlepart(SinglePart::plain(msg.body.clone()))?)
+        .subject(msg.subject.clone());
+    // Every part declares charset=utf-8 (mail clients must not guess a legacy
+    // charset for Cyrillic) and is base64-encoded (no long-line limits for the
+    // HTML part, deterministic on the wire).
+    let part = |content_type: ContentType, text: &str| {
+        SinglePart::builder().header(content_type).body(
+            Body::new_with_encoding(text.to_owned(), ContentTransferEncoding::Base64)
+                .expect("base64 can encode any body"),
+        )
+    };
+    Ok(match &msg.html {
+        Some(html) => builder.multipart(
+            MultiPart::alternative()
+                .singlepart(part(ContentType::TEXT_PLAIN, &msg.body))
+                .singlepart(part(ContentType::TEXT_HTML, html)),
+        )?,
+        None => builder.singlepart(part(ContentType::TEXT_PLAIN, &msg.body))?,
+    })
 }
 
 #[derive(Debug)]
@@ -252,377 +270,110 @@ impl Mailer for SmtpMailer {
     }
 }
 
-/// Plain-text messages work in both the app and web account. Codes in web
-/// links are fragments, so they do not enter HTTP access logs.
-pub mod templates {
-    use super::{MailKind, MailMessage};
-
-    fn footer(public_url: Option<&str>) -> String {
-        match public_url {
-            Some(url) => format!("\n\n-- \nConsoleCrypt server at {url}\n"),
-            None => "\n\n-- \nConsoleCrypt\n".to_owned(),
-        }
-    }
-
-    fn account_link(public_url: Option<&str>, action: &str, token: &str) -> String {
-        public_url
-            .map(|url| {
-                format!(
-                    "\n\nОткрыть личный кабинет:\n{}/account#action={action}&token={token}",
-                    url.trim_end_matches('/')
-                )
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn verify_email(to: &str, token: &str, public_url: Option<&str>) -> MailMessage {
-        MailMessage {
-            kind: MailKind::VerifyEmail,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — подтвердите email".to_owned(),
-            body: format!(
-                "Подтвердите email в ConsoleCrypt. Вставьте этот код в приложение или личный кабинет:\n\n    {token}\n\n\
-                 Если вы не создавали аккаунт, просто проигнорируйте это письмо.{}{}",
-                account_link(public_url, "verify", token),
-                footer(public_url)
-            ),
-        }
-    }
-
-    pub fn password_reset(
-        to: &str,
-        token: &str,
-        recovery: bool,
-        public_url: Option<&str>,
-    ) -> MailMessage {
-        MailMessage {
-            kind: if recovery {
-                MailKind::AccountRecovery
-            } else {
-                MailKind::PasswordReset
-            },
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — восстановление доступа".to_owned(),
-            body: format!(
-                "Для изменения пароля аккаунта ConsoleCrypt вставьте этот одноразовый код:\n\n    {token}\n\n\
-                 Код действует ограниченное время. После смены пароля все сеансы будут завершены. \
-                 Это не разблокирует хранилище: для него нужна парольная фраза, \
-                 ключ восстановления или доверенное устройство.\n\n\
-                 Если вы не запрашивали восстановление, проигнорируйте это письмо.{}{}",
-                if recovery { String::new() } else { account_link(public_url, "reset", token) },
-                footer(public_url)
-            ),
-        }
-    }
-
-    /// Many failed sign-ins to the account from many networks (security
-    /// audit S2, TR-8); at most one a day.
-    pub fn failed_logins(to: &str, public_url: Option<&str>) -> MailMessage {
-        MailMessage {
-            kind: MailKind::FailedLogins,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — много неудачных попыток входа / Many failed sign-in attempts"
-                .to_owned(),
-            body: format!(
-                "Кто-то многократно пытается войти в ваш аккаунт ConsoleCrypt с неверным паролем. \
-                 Сервер временно ограничил попытки входа с новых устройств. Ваши устройства, \
-                 на которых вы уже входили, по-прежнему могут войти.\n\n\
-                 Если это были не вы, задайте длинный уникальный пароль аккаунта и проверьте \
-                 список устройств.\n\n\
-                 Someone is repeatedly trying to sign in to your ConsoleCrypt account with a wrong \
-                 password. The server has temporarily limited sign-ins from new devices; the \
-                 devices you already use can still sign in.\n\n\
-                 If this was not you, use a long unique account password and review your \
-                 devices.{}",
-                footer(public_url)
-            ),
-        }
-    }
-
-    pub fn device_revoked(to: &str, device_name: &str, public_url: Option<&str>) -> MailMessage {
-        MailMessage {
-            kind: MailKind::DeviceRevoked,
-            to: to.to_owned(),
-            subject: "A device was removed from your ConsoleCrypt account".to_owned(),
-            body: format!(
-                "The device \"{device_name}\" was revoked and can no longer sync.\n\n\
-                 If this was not you, sign in on a trusted device, review your devices and \
-                 change your account password.{}",
-                footer(public_url)
-            ),
-        }
-    }
-
-    /// "This wasn't me" link of the device-protection mails (protocol 1.7).
-    fn deny_link(public_url: Option<&str>, token: &str) -> String {
-        match public_url {
-            Some(url) => format!(
-                "\n\nЭто не я — отозвать это устройство / This wasn't me — revoke this device:\n\
-                 {}/account#action=deny-device&token={token}",
-                url.trim_end_matches('/')
-            ),
-            None => "\n\nЕсли это не вы, отзовите устройство на доверенном устройстве и смените \
-                     пароль аккаунта. / If this wasn't you, revoke the device on a trusted \
-                     device and change your account password."
-                .to_owned(),
-        }
-    }
-
-    /// What the "new device" mail tells about the device.
-    #[derive(Debug)]
-    pub struct NewDeviceInfo<'a> {
-        pub name: &'a str,
-        pub platform: &'a str,
-        pub client_version: Option<&'a str>,
-        pub at: chrono::DateTime<chrono::Utc>,
-        pub ip: Option<std::net::IpAddr>,
-    }
-
-    pub fn new_device(
-        to: &str,
-        info: &NewDeviceInfo<'_>,
-        token: &str,
-        public_url: Option<&str>,
-    ) -> MailMessage {
-        let at = info.at.format("%Y-%m-%d %H:%M UTC");
-        let version = info.client_version.unwrap_or("—");
-        let ip = info
-            .ip
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "—".to_owned());
-        MailMessage {
-            kind: MailKind::NewDevice,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — вход с нового устройства / New device signed in".to_owned(),
-            body: format!(
-                "В ваш аккаунт ConsoleCrypt вошло новое устройство.\n\
-                 A new device signed in to your ConsoleCrypt account.\n\n\
-                 Устройство / Device: \"{name}\"\n\
-                 Платформа / Platform: {platform}\n\
-                 Версия / Version: {version}\n\
-                 Время / Time: {at}\n\
-                 IP: {ip}\n\n\
-                 Если это вы — ничего делать не нужно. Первые дни новое устройство не может \
-                 отзывать ваши доверенные устройства.\n\
-                 If this was you, there is nothing to do. For its first days a new device \
-                 cannot revoke your trusted devices.{}{}",
-                deny_link(public_url, token),
-                footer(public_url),
-                name = info.name,
-                platform = info.platform,
-            ),
-        }
-    }
-
-    /// Teams (protocol 1.9): an account was invited into a team. The team
-    /// name is end-to-end encrypted, so only the inviter, the role and the
-    /// inviter's plain-text note can be shown.
-    pub fn team_invitation(
-        to: &str,
-        inviter: &str,
-        role: &str,
-        note: Option<&str>,
-        public_url: Option<&str>,
-    ) -> MailMessage {
-        let note_ru = note
-            .map(|n| format!("\n\nКомментарий приглашения: {n}"))
-            .unwrap_or_default();
-        let note_en = note
-            .map(|n| format!("\n\nInvitation note: {n}"))
-            .unwrap_or_default();
-        MailMessage {
-            kind: MailKind::TeamInvitation,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — приглашение в команду / Team invitation".to_owned(),
-            body: format!(
-                "{inviter} приглашает вас в команду ConsoleCrypt (роль: {role}).{note_ru}\n\n\
-                 Откройте ConsoleCrypt → Настройки → Команды, примите приглашение и сверьте \
-                 код с {inviter} — по телефону или лично. Доступ появится только после того, \
-                 как коды совпадут. Если вы не ждали приглашения, просто отклоните его.\n\n\
-                 {inviter} invited you to a ConsoleCrypt team (role: {role}).{note_en}\n\n\
-                 Open ConsoleCrypt → Settings → Teams, accept the invitation and compare the \
-                 code with {inviter} by phone or in person. Access is granted only after the \
-                 codes match. If you did not expect this, decline it.{}",
-                footer(public_url)
-            ),
-        }
-    }
-
-    /// Sent once when an hour has more sign-ins than individual mails.
-    pub fn new_device_summary(to: &str, public_url: Option<&str>) -> MailMessage {
-        MailMessage {
-            kind: MailKind::NewDevice,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — много входов с новых устройств / Many new device sign-ins"
-                .to_owned(),
-            body: format!(
-                "За последний час в ваш аккаунт ConsoleCrypt вошло много новых устройств. \
-                 Отдельных писем о них в этот час больше не будет. Проверьте список устройств \
-                 на доверенном устройстве и, если это не вы, смените пароль аккаунта.\n\n\
-                 Many new devices signed in to your ConsoleCrypt account in the last hour. \
-                 No further mails are sent for them this hour. Review your devices on a trusted \
-                 device and, if this wasn't you, change your account password.{}",
-                footer(public_url)
-            ),
-        }
-    }
-
-    pub fn envelope_abuse(
-        to: &str,
-        device_name: &str,
-        token: &str,
-        public_url: Option<&str>,
-    ) -> MailMessage {
-        MailMessage {
-            kind: MailKind::EnvelopeAbuse,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — повторные попытки доступа к хранилищу / Repeated vault access attempts"
-                .to_owned(),
-            body: format!(
-                "Кто-то многократно запрашивает доступ к хранилищу с устройства \"{device_name}\". \
-                 Сервер временно ограничил такие запросы.\n\n\
-                 Someone is repeatedly requesting access to your vault from the device \
-                 \"{device_name}\". The server has temporarily limited these requests.{}{}",
-                deny_link(public_url, token),
-                footer(public_url)
-            ),
-        }
-    }
-
-    /// The account password was changed from a device in quarantine:
-    /// trusted devices stay signed in (TR-7).
-    pub fn password_changed_new_device(
-        to: &str,
-        device_name: &str,
-        token: &str,
-        public_url: Option<&str>,
-    ) -> MailMessage {
-        MailMessage {
-            kind: MailKind::PasswordChanged,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — пароль изменён с нового устройства / Password changed from a new device"
-                .to_owned(),
-            body: format!(
-                "Пароль аккаунта ConsoleCrypt изменён с нового устройства \"{device_name}\". \
-                 Ваши доверенные устройства остались в аккаунте.\n\n\
-                 Your ConsoleCrypt account password was changed from the new device \
-                 \"{device_name}\". Your trusted devices stay signed in.{}\n\n\
-                 После отзыва смените пароль через «Забыли пароль?». / After revoking, reset \
-                 the password via \"Forgot password?\".{}",
-                deny_link(public_url, token),
-                footer(public_url)
-            ),
-        }
-    }
-
-    /// TR-13: after a password reset, with the devices it revoked.
-    pub fn password_reset_completed(
-        to: &str,
-        revoked: &[String],
-        token: &str,
-        public_url: Option<&str>,
-    ) -> MailMessage {
-        let list = if revoked.is_empty() {
-            "—".to_owned()
-        } else {
-            revoked
-                .iter()
-                .map(|n| format!("  • \"{n}\""))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        MailMessage {
-            kind: MailKind::PasswordResetCompleted,
-            to: to.to_owned(),
-            subject: "ConsoleCrypt — пароль аккаунта сброшен / Account password was reset"
-                .to_owned(),
-            body: format!(
-                "Пароль аккаунта ConsoleCrypt сброшен, все сеансы завершены. Отозваны устройства, \
-                 которые ни разу не открывали хранилище:\n\
-                 Your ConsoleCrypt account password was reset and every session was signed out. \
-                 Devices that never unlocked the vault were revoked:\n\n{list}\n\n\
-                 Если сброс сделали не вы, ссылка ниже отзовёт новые неподтверждённые \
-                 устройства, вошедшие после сброса; затем снова сбросьте пароль.\n\
-                 If you did not reset it, the link below revokes new unconfirmed devices that \
-                 signed in after the reset; then reset the password again.{}{}",
-                deny_link(public_url, token),
-                footer(public_url)
-            ),
-        }
-    }
-
-    pub fn password_changed(to: &str, public_url: Option<&str>) -> MailMessage {
-        MailMessage {
-            kind: MailKind::PasswordChanged,
-            to: to.to_owned(),
-            subject: "Your ConsoleCrypt account password was changed".to_owned(),
-            body: format!(
-                "Your account password was changed and other sessions were signed out.\n\n\
-                 If this was not you, reset your password immediately.{}",
-                footer(public_url)
-            ),
-        }
-    }
-}
+pub mod templates;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MailLanguage;
+    use std::time::Duration;
+
+    fn ctx(url: Option<&str>) -> templates::Ctx<'_> {
+        templates::Ctx {
+            public_url: url,
+            language: MailLanguage::Ru,
+        }
+    }
+
+    const TTL: Duration = Duration::from_secs(3600);
+
+    /// Decoded bodies of the `content_type` parts of a formatted message.
+    fn parts(wire: &str, content_type: &str) -> Vec<String> {
+        use base64::Engine as _;
+        let mut out = Vec::new();
+        let header = format!("Content-Type: {content_type}\r\n");
+        let mut rest = wire;
+        while let Some(i) = rest.find(&header) {
+            rest = &rest[i + header.len()..];
+            let (headers, after) = rest.split_once("\r\n\r\n").unwrap();
+            assert!(
+                headers.contains("Content-Transfer-Encoding: base64"),
+                "{content_type} part must be base64"
+            );
+            let end = after.find("\r\n--").unwrap_or(after.len());
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(after[..end].split_whitespace().collect::<String>())
+                .unwrap();
+            out.push(String::from_utf8(decoded).unwrap());
+            rest = &after[end..];
+        }
+        out
+    }
 
     #[test]
-    fn all_templates_declare_utf8_mime_on_the_wire() {
+    fn all_templates_are_utf8_multipart_alternative_on_the_wire() {
         let from = "ConsoleCrypt <no-reply@example.org>".parse().unwrap();
         let token = format!("cct_{}", uuid::Uuid::new_v4().simple());
-        let url = Some("https://example.org");
-        let messages = [
-            templates::verify_email("a@example.org", &token, url),
-            templates::password_reset("a@example.org", &token, false, url),
-            templates::password_reset("a@example.org", &token, true, url),
-            templates::device_revoked("a@example.org", "Мой ноутбук", url),
-            templates::password_changed("a@example.org", url),
-            templates::new_device(
-                "a@example.org",
-                &templates::NewDeviceInfo {
-                    name: "Ноутбук",
-                    platform: "linux",
-                    client_version: Some("0.8.6"),
-                    at: chrono::Utc::now(),
-                    ip: Some("192.0.2.1".parse().unwrap()),
-                },
-                "ccd_x",
-                url,
-            ),
-            templates::new_device_summary("a@example.org", url),
-            templates::envelope_abuse("a@example.org", "Ноутбук", "ccd_x", url),
-            templates::password_changed_new_device("a@example.org", "Ноутбук", "ccd_x", url),
-            templates::password_reset_completed("a@example.org", &["Ноутбук".into()], "ccd_x", url),
-        ];
-        for msg in messages {
-            let wire = String::from_utf8(build_message(&from, &msg).unwrap().formatted()).unwrap();
-            let (headers, _) = wire.split_once("\r\n\r\n").unwrap();
-            // Decoding bytes as UTF-8 in a test is insufficient: email clients
-            // need both MIME and an explicit charset to choose that decoder.
-            assert!(headers.lines().any(|line| line == "MIME-Version: 1.0"));
-            assert!(headers.lines().any(|line| {
-                line.eq_ignore_ascii_case("Content-Type: text/plain; charset=utf-8")
-            }));
+        for url in [None, Some("https://example.org")] {
+            let c = ctx(url);
+            let messages = [
+                templates::verify_email(c, "a@example.org", &token, TTL),
+                templates::password_reset(c, "a@example.org", &token, false, TTL),
+                templates::password_reset(c, "a@example.org", &token, true, TTL),
+                templates::failed_logins(c, "a@example.org"),
+                templates::device_revoked(c, "a@example.org", "Мой ноутбук"),
+                templates::password_changed(c, "a@example.org"),
+                templates::new_device(
+                    c,
+                    "a@example.org",
+                    &templates::NewDeviceInfo {
+                        name: "Ноутбук",
+                        platform: "linux",
+                        client_version: Some("0.8.6"),
+                        at: chrono::Utc::now(),
+                        ip: Some("192.0.2.1".parse().unwrap()),
+                    },
+                    "ccd_x",
+                ),
+                templates::new_device_summary(c, "a@example.org"),
+                templates::envelope_abuse(c, "a@example.org", "Ноутбук", "ccd_x"),
+                templates::password_changed_new_device(c, "a@example.org", "Ноутбук", "ccd_x"),
+                templates::password_reset_completed(
+                    c,
+                    "a@example.org",
+                    &["Ноутбук".into()],
+                    "ccd_x",
+                ),
+                templates::team_invitation(
+                    c,
+                    "a@example.org",
+                    "boss@example.org",
+                    "editor",
+                    Some("Ops"),
+                ),
+            ];
+            for msg in messages {
+                let wire =
+                    String::from_utf8(build_message(&from, &msg).unwrap().formatted()).unwrap();
+                let (headers, _) = wire.split_once("\r\n\r\n").unwrap();
+                // Decoding bytes as UTF-8 in a test is insufficient: email clients
+                // need both MIME and an explicit charset to choose that decoder.
+                assert!(headers.lines().any(|line| line == "MIME-Version: 1.0"));
+                assert!(headers.contains("Content-Type: multipart/alternative"));
+                assert_eq!(
+                    parts(&wire, "text/plain; charset=utf-8"),
+                    vec![msg.body.replace('\n', "\r\n")]
+                );
+                let html = parts(&wire, "text/html; charset=utf-8");
+                assert_eq!(html.len(), 1);
+                assert!(html[0].starts_with("<!DOCTYPE html>"));
+            }
         }
     }
 
     #[test]
-    fn deny_links_carry_the_token_in_the_fragment() {
-        let m =
-            templates::envelope_abuse("a@example.org", "d", "ccd_TOKEN", Some("https://x.test/"));
-        assert!(m
-            .body
-            .contains("https://x.test/account#action=deny-device&token=ccd_TOKEN"));
-        let m = templates::envelope_abuse("a@example.org", "d", "ccd_TOKEN", None);
-        assert!(!m.body.contains("ccd_TOKEN"));
-    }
-
-    #[test]
-    fn debug_redacts_body() {
-        let m = templates::verify_email("a@example.org", "cct_SECRET", None);
+    fn debug_redacts_body_and_html() {
+        let m = templates::verify_email(ctx(None), "a@example.org", "cct_SECRET", TTL);
         assert!(!format!("{m:?}").contains("SECRET"));
     }
 
@@ -634,23 +385,20 @@ mod tests {
             from: "ConsoleCrypt <no-reply@localhost>".parse().unwrap(),
         };
         let token = format!("cct_{}", uuid::Uuid::new_v4().simple());
-        let msg = templates::verify_email("a@example.org", &token, None);
+        let msg = templates::verify_email(ctx(None), "a@example.org", &token, TTL);
         let expected_body = msg.body.replace('\n', "\r\n");
         mailer.send(msg).await.unwrap();
         let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
         let content = std::fs::read_to_string(&path).unwrap();
-        // UTF-8 templates are MIME/base64 encoded by lettre. Check the
-        // decoded wire body, not whether an ASCII token survived encoding.
-        use base64::Engine as _;
-        let (headers, body) = content.split_once("\r\n\r\n").unwrap();
-        assert!(headers.contains("Content-Type: text/plain; charset=utf-8\r\n"));
-        assert!(headers.contains("Content-Transfer-Encoding: base64"));
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(body.split_whitespace().collect::<String>())
-            .unwrap();
-        assert_eq!(String::from_utf8(decoded).unwrap(), expected_body);
+        // UTF-8 templates are MIME/base64 encoded. Check the decoded wire
+        // parts, not whether an ASCII token survived encoding.
+        assert_eq!(
+            parts(&content, "text/plain; charset=utf-8"),
+            vec![expected_body]
+        );
+        assert!(parts(&content, "text/html; charset=utf-8")[0].contains(&token));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;

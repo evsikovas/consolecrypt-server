@@ -379,7 +379,15 @@ async fn backend_failures_never_echo_remote_or_database_error_text() {
             marker: marker.clone(),
             attempted: attempted.clone(),
         }),
-        mail::templates::verify_email("test@example.invalid", &marker, None),
+        mail::templates::verify_email(
+            mail::templates::Ctx {
+                public_url: None,
+                language: consolecrypt_server::config::MailLanguage::Ru,
+            },
+            "test@example.invalid",
+            &marker,
+            std::time::Duration::from_secs(3600),
+        ),
     );
     tokio::time::timeout(std::time::Duration::from_secs(2), attempted.notified())
         .await

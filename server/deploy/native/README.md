@@ -57,7 +57,10 @@ sudo systemctl enable --now consolecrypt-server
 публичный HTTPS и WebSocket обслуживает ваш reverse proxy. Если приложение
 доступно только через один доверенный proxy, включите
 `CC_TRUST_PROXY_HEADERS=true`. `CC_PUBLIC_URL` необязателен: без него письма
-содержат код, который пользователь вводит в клиенте.
+содержат код, который пользователь вводит в клиенте. Чтобы письма вели на
+встроенную страницу аккаунта, задайте `CC_WEB_ACCOUNT=true` и `CC_PUBLIC_URL`
+равным публичному https-адресу сервера и передавайте `/account` и `/account/*`
+через proxy. Язык писем и страницы — `CC_MAIL_LANGUAGE` (`ru` или `en`).
 
 Для проверки после настройки: `consolecrypt-server --config /etc/consolecrypt/server.json healthcheck`.
 Под тем же пользователем можно запускать `migrate` и `admin` с тем же `--config`.

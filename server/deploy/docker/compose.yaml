@@ -49,7 +49,10 @@ services:
       CC_RUN_MIGRATIONS: ${CC_RUN_MIGRATIONS:-true}
       CC_LISTEN_ADDR: 0.0.0.0:8080
       CC_METRICS_LISTEN: "off"
-      CC_PUBLIC_URL: ""
+      # Empty: mail asks to paste the code into the app. With CC_WEB_ACCOUNT=true
+      # set it to https://<CC_DOMAIN>: mail then links to the built-in /account.
+      CC_PUBLIC_URL: ${CC_PUBLIC_URL:-}
+      CC_WEB_ACCOUNT: ${CC_WEB_ACCOUNT:-false}
       CC_REGISTRATION_OPEN: ${CC_REGISTRATION_OPEN:-true}
       CC_REQUIRE_EMAIL_VERIFICATION: "true"
       CC_REQUIRE_REQUEST_PROOF: "true"
@@ -59,6 +62,7 @@ services:
       CC_LOG_FORMAT: json
       CC_MAIL_TRANSPORT: ${CC_MAIL_TRANSPORT:-smtp}
       CC_MAIL_FROM: ${CC_MAIL_FROM:?Run init-config.py first}
+      CC_MAIL_LANGUAGE: ${CC_MAIL_LANGUAGE:-ru}
       CC_SMTP_HOST: ${CC_SMTP_HOST:-}
       CC_SMTP_PORT: ${CC_SMTP_PORT:-587}
       CC_SMTP_TLS: ${CC_SMTP_TLS:-starttls}

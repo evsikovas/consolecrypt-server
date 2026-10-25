@@ -161,6 +161,8 @@ def main():
             assert not services["postgres"].get("ports")
             assert resolved["networks"]["database"]["internal"] is True
             assert services["server"]["environment"]["CC_PUBLIC_URL"] == ""
+            assert services["server"]["environment"]["CC_WEB_ACCOUNT"] == "false"
+            assert services["server"]["environment"]["CC_MAIL_LANGUAGE"] == "ru"
             assert services["server"]["environment"]["CC_METRICS_LISTEN"] == "off"
             # `compose config` escapes dollars again for a reusable Compose document.
             assert services["server"]["environment"]["CC_SMTP_PASSWORD"].replace("$$", "$") == special_password

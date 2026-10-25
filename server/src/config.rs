@@ -39,8 +39,13 @@ pub struct Config {
     pub database_connect_timeout: Duration,
     pub database_max_connections: u32,
     pub run_migrations: bool,
-    /// Public base URL of this instance, used in emails. Optional.
+    /// Public base URL where the account page (`<url>/account`) is served:
+    /// the operator's website, or this server itself with
+    /// [`web_account`](Self::web_account). Emails link there when set.
     pub public_url: Option<String>,
+    /// Serve the built-in account page at `/account` (`CC_WEB_ACCOUNT`, off
+    /// by default: the server stays API-only unless a self-hoster opts in).
+    pub web_account: bool,
     pub source_code_url: String,
     pub registration_open: bool,
     pub require_email_verification: bool,
@@ -203,6 +208,17 @@ pub enum SmtpTls {
 pub struct MailConfig {
     pub transport: MailTransport,
     pub from: String,
+    /// Language of outgoing mail and of the built-in account page
+    /// (`CC_MAIL_LANGUAGE`).
+    pub language: MailLanguage,
+}
+
+/// Language of outgoing mail. API error messages stay English (clients
+/// localize by error code); mail is read by people, so it is localized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailLanguage {
+    Ru,
+    En,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -265,7 +281,10 @@ impl Config {
             ),
         };
 
-        let auth = AuthConfig::from_lookup(&get, get("CC_PUBLIC_URL").as_deref())?;
+        let public_url = get("CC_PUBLIC_URL")
+            .map(|url| parse_public_url(&url))
+            .transpose()?;
+        let auth = AuthConfig::from_lookup(&get, public_url.as_deref())?;
         let config = Self {
             auth,
             listen_addr: parse_or(
@@ -282,7 +301,8 @@ impl Config {
                 20,
             )?,
             run_migrations: parse_bool(get("CC_RUN_MIGRATIONS"), "CC_RUN_MIGRATIONS", true)?,
-            public_url: get("CC_PUBLIC_URL"),
+            public_url,
+            web_account: parse_bool(get("CC_WEB_ACCOUNT"), "CC_WEB_ACCOUNT", false)?,
             source_code_url: get("CC_SOURCE_CODE_URL")
                 .unwrap_or_else(|| DEFAULT_SOURCE_CODE_URL.to_owned()),
             registration_open: parse_bool(
@@ -450,6 +470,15 @@ impl Config {
                 transport: mail_transport,
                 from: get("CC_MAIL_FROM")
                     .unwrap_or_else(|| "ConsoleCrypt <no-reply@localhost>".into()),
+                language: match get("CC_MAIL_LANGUAGE").as_deref().map(str::trim) {
+                    None | Some("ru") => MailLanguage::Ru,
+                    Some("en") => MailLanguage::En,
+                    Some(other) => {
+                        return Err(ConfigError(format!(
+                            "CC_MAIL_LANGUAGE: unknown value {other:?} (ru|en)"
+                        )))
+                    }
+                },
             },
             sync_page_bytes: parse_or(
                 get("CC_SYNC_PAGE_BYTES"),
@@ -655,6 +684,28 @@ fn parse_or<T: FromStr>(v: Option<String>, key: &str, default: T) -> Result<T, C
     }
 }
 
+/// `CC_PUBLIC_URL` goes into email links verbatim: require an absolute
+/// http(s) origin (optionally with a path), without query or fragment.
+fn parse_public_url(v: &str) -> Result<String, ConfigError> {
+    let url = v.trim().trim_end_matches('/');
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"));
+    match rest {
+        Some(rest)
+            if !rest.is_empty()
+                && !rest.starts_with('/')
+                && !rest.contains(['?', '#', '"', '<', '>', '\\'])
+                && !rest.chars().any(char::is_whitespace) =>
+        {
+            Ok(url.to_owned())
+        }
+        _ => Err(ConfigError(
+            "CC_PUBLIC_URL: expected an absolute URL like https://sync.example.org".into(),
+        )),
+    }
+}
+
 fn parse_bool(v: Option<String>, key: &str, default: bool) -> Result<bool, ConfigError> {
     match v.as_deref().map(str::trim) {
         None => Ok(default),
@@ -672,6 +723,7 @@ impl fmt::Debug for Config {
             .field("database_max_connections", &self.database_max_connections)
             .field("run_migrations", &self.run_migrations)
             .field("public_url", &self.public_url)
+            .field("web_account", &self.web_account)
             .field("source_code_url", &self.source_code_url)
             .field("registration_open", &self.registration_open)
             .field(
@@ -729,6 +781,7 @@ impl fmt::Debug for MailConfig {
         f.debug_struct("MailConfig")
             .field("transport", &self.transport)
             .field("from", &self.from)
+            .field("language", &self.language)
             .finish()
     }
 }
@@ -829,8 +882,42 @@ mod tests {
     fn rejects_bad_values() {
         assert!(cfg(&[("CC_DATABASE_URL", "x"), ("CC_EVENT_BUS", "nats")]).is_err());
         assert!(cfg(&[("CC_DATABASE_URL", "x"), ("CC_RUN_MIGRATIONS", "maybe")]).is_err());
+        assert!(cfg(&[("CC_DATABASE_URL", "x"), ("CC_MAIL_LANGUAGE", "de")]).is_err());
+        let en = cfg(&[("CC_DATABASE_URL", "x"), ("CC_MAIL_LANGUAGE", "en")]).unwrap();
+        assert_eq!(en.mail.language, MailLanguage::En);
         let c = cfg(&[("CC_DATABASE_URL", "x"), ("CC_METRICS_LISTEN", "off")]).unwrap();
         assert!(c.metrics_listen.is_none());
+        assert_eq!(c.mail.language, MailLanguage::Ru);
+    }
+
+    #[test]
+    fn public_url_is_an_absolute_http_url_and_web_account_is_opt_in() {
+        let url = |v: &str| cfg(&[("CC_DATABASE_URL", "x"), ("CC_PUBLIC_URL", v)]);
+        let c = url(" https://sync.example.org/ ").unwrap();
+        assert_eq!(c.public_url.as_deref(), Some("https://sync.example.org"));
+        assert!(!c.web_account, "the server stays API-only by default");
+        assert_eq!(
+            url("http://127.0.0.1:8080/cc")
+                .unwrap()
+                .public_url
+                .as_deref(),
+            Some("http://127.0.0.1:8080/cc")
+        );
+        assert!(url("").unwrap().public_url.is_none());
+        for bad in [
+            "sync.example.org",
+            "https://",
+            "https:///x",
+            "ftp://sync.example.org",
+            "https://sync.example.org/?a=1",
+            "https://sync.example.org/#x",
+            "https://sync example.org",
+            "https://sync.example.org/\"><x",
+        ] {
+            assert!(url(bad).is_err(), "{bad}");
+        }
+        let on = cfg(&[("CC_DATABASE_URL", "x"), ("CC_WEB_ACCOUNT", "true")]).unwrap();
+        assert!(on.web_account);
     }
 }
 

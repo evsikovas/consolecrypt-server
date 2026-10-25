@@ -297,10 +297,10 @@ async fn abuse_mail(state: &AppState, auth: &AuthContext) -> AppResult<()> {
     mail::send_in_background(
         state.mailer.clone(),
         templates::envelope_abuse(
+            templates::Ctx::new(&state.config),
             &email,
             &name,
             token.token.expose_secret(),
-            state.config.public_url.as_deref(),
         ),
     );
     Ok(())
@@ -375,15 +375,15 @@ async fn notify_new_device(
     let message = if limit == 0 || count <= limit {
         let token = issue_deny_token(&mut tx, user_id, Some(reg.device_id)).await?;
         Some(templates::new_device(
+            templates::Ctx::new(&state.config),
             &email,
             &info,
             token.token.expose_secret(),
-            state.config.public_url.as_deref(),
         ))
     } else if count == limit + 1 {
         Some(templates::new_device_summary(
+            templates::Ctx::new(&state.config),
             &email,
-            state.config.public_url.as_deref(),
         ))
     } else {
         None

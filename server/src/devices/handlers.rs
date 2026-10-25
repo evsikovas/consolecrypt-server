@@ -808,7 +808,7 @@ pub async fn revoke_device(
         .await;
     mail::send_in_background(
         state.mailer.clone(),
-        templates::device_revoked(&email, &device_name, state.config.public_url.as_deref()),
+        templates::device_revoked(templates::Ctx::new(&state.config), &email, &device_name),
     );
     Ok(StatusCode::NO_CONTENT)
 }
@@ -929,7 +929,7 @@ pub async fn deny_device(
             .await;
         mail::send_in_background(
             state.mailer.clone(),
-            templates::device_revoked(&email, name, state.config.public_url.as_deref()),
+            templates::device_revoked(templates::Ctx::new(&state.config), &email, name),
         );
     }
     Ok(Json(DenyDeviceResponse {
