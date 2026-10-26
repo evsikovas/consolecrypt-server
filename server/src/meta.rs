@@ -36,6 +36,7 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
             teams: state.config.teams_enabled,
             vrk_commitment: true,
             team_key_commitment: true,
+            vault_pending_deletion: true,
         },
     }
 }

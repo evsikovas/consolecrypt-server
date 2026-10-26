@@ -409,3 +409,134 @@ async fn vault_epoch_is_stable_until_rotated_after_restore() {
     .await
     .is_err());
 }
+
+/// `DELETE /v1/vaults/{id}` with an optional `x-cc-protocol-version`.
+async fn delete_vault_as(
+    srv: &TestServer,
+    path: &str,
+    token: &str,
+    vak: &cc_protocol::Bytes,
+    protocol: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
+    let bytes = serde_json::to_vec(&json!({ "vault_access_key": vak })).unwrap();
+    let mut req = srv
+        .http
+        .delete(srv.url(path))
+        .bearer_auth(token)
+        .header("content-type", "application/json")
+        .body(bytes.clone());
+    if let Some(version) = protocol {
+        req = req.header("x-cc-protocol-version", version);
+    }
+    let resp = srv
+        .signed(req, token, "DELETE", path, &bytes)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, resp.json().await.unwrap_or(serde_json::Value::Null))
+}
+
+#[tokio::test]
+async fn untrusted_device_schedules_a_deletion_a_trusted_one_cancels() {
+    let srv = server!();
+    let a = srv.new_account().await;
+    let vault = srv.create_vault(&a).await;
+    let phone = srv.new_device_session(&a, "phone").await;
+    let path = paths::fill(paths::VAULT, &[("vault_id", &vault.id.to_string())]);
+    let cancel = paths::fill(
+        paths::VAULT_DELETION_CANCEL,
+        &[("vault_id", &vault.id.to_string())],
+    );
+    let vak = vault.vak_bytes();
+
+    // Clients before protocol 1.13 still get a refusal from an untrusted device.
+    let (s, _) = delete_vault_as(&srv, &path, &phone.access, &vak, None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = delete_vault_as(&srv, &path, &phone.access, &vak, Some("1.12")).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    // The access key is still checked.
+    let wrong = cc_protocol::Bytes::new(random::<32>().to_vec());
+    let (s, _) = delete_vault_as(&srv, &path, &phone.access, &wrong, Some("1.13")).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A 1.13 client schedules the deletion.
+    let (s, body) = delete_vault_as(&srv, &path, &phone.access, &vak, Some("1.13")).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["state"], "pending_deletion");
+    let scheduled = body["deletion_scheduled_at"].as_str().unwrap().to_owned();
+    let when = chrono::DateTime::parse_from_rfc3339(&scheduled).unwrap();
+    let days = (when.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_hours();
+    assert!((24 * 7 - 1..=24 * 7).contains(&days), "{scheduled}");
+    // The vault keeps working meanwhile; a repeat cannot postpone it.
+    assert_eq!(srv.changes(&a, vault.id, 0).await.0, StatusCode::OK);
+    let (s, body) = delete_vault_as(&srv, &path, &phone.access, &vak, Some("1.13")).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    assert_eq!(body["deletion_scheduled_at"], scheduled.as_str());
+    let (_, body) = srv.get(&path, &a.access).await;
+    assert_eq!(body["state"], "pending_deletion");
+
+    // Only a trusted device with the access key cancels.
+    let (s, _) = srv
+        .post(
+            &cancel,
+            Some(&phone.access),
+            &json!({ "vault_access_key": vak }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = srv
+        .post(
+            &cancel,
+            Some(&a.access),
+            &json!({ "vault_access_key": wrong }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, body) = srv
+        .post(
+            &cancel,
+            Some(&a.access),
+            &json!({ "vault_access_key": vak }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], "active");
+    assert!(body.get("deletion_scheduled_at").is_none(), "{body}");
+    let (s, _) = srv
+        .post(
+            &cancel,
+            Some(&a.access),
+            &json!({ "vault_access_key": vak }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+
+    // Past the grace period the maintenance pass deletes it.
+    let (s, _) = delete_vault_as(&srv, &path, &phone.access, &vak, Some("1.13")).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let report = consolecrypt_server::jobs::run_once(&srv.state)
+        .await
+        .unwrap();
+    assert_eq!(report.vault_deletions_completed, 0, "not due yet");
+    sqlx::query(
+        "UPDATE vaults SET deletion_scheduled_at = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(uuid::Uuid::from(vault.id))
+    .execute(&srv.state.db)
+    .await
+    .unwrap();
+    let report = consolecrypt_server::jobs::run_once(&srv.state)
+        .await
+        .unwrap();
+    assert_eq!(report.vault_deletions_completed, 1);
+    assert_eq!(srv.get(&path, &a.access).await.0, StatusCode::GONE);
+    let (s, _) = srv
+        .post(
+            &cancel,
+            Some(&a.access),
+            &json!({ "vault_access_key": vak }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::GONE);
+}

@@ -10,6 +10,7 @@
 use crate::state::AppState;
 use serde::Serialize;
 use std::time::Duration;
+use uuid::Uuid;
 
 /// Advisory-lock key ("ccmaint" as ASCII) shared by all replicas.
 const MAINTENANCE_LOCK_KEY: i64 = 0x63_63_6d_61_69_6e_74;
@@ -62,6 +63,8 @@ pub struct MaintenanceReport {
     pub tombstones: i64,
     pub sync_mutations_deleted: u64,
     pub vaults_purged: u64,
+    /// Pending deletions whose grace period ended (protocol 1.13).
+    pub vault_deletions_completed: u64,
     /// Retained content of owner-deleted shared items past the restore window.
     pub shared_restores_expired: u64,
     pub audit_events_deleted: u64,
@@ -208,6 +211,17 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<MaintenanceReport> {
             .execute(&mut *conn)
             .await?
             .rows_affected();
+        }
+        // Pending deletions past their grace period become deletions.
+        let due: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM vaults
+              WHERE state = 'pending_deletion' AND deletion_scheduled_at <= now()",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        for vault_id in due {
+            crate::vaults::handlers::mark_deleted(&mut conn, vault_id).await?;
+            report.vault_deletions_completed += 1;
         }
         if r.deleted_vault_days > 0 {
             // Cascades to members, sequences, envelopes, objects, mutations.

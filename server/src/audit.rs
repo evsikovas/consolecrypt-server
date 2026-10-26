@@ -44,6 +44,9 @@ pub enum AuditType {
     EnvelopeRateLimited,
     VaultCreated,
     VaultDeleted,
+    /// An untrusted device of the owner scheduled a deletion (protocol 1.13).
+    VaultDeletionScheduled,
+    VaultDeletionCancelled,
     EnvelopeCreated,
     EnvelopeDeleted,
     EnvelopeReplaced,
@@ -113,6 +116,8 @@ impl AuditType {
             AuditType::EnvelopeRateLimited => "envelope_rate_limited",
             AuditType::VaultCreated => "vault_created",
             AuditType::VaultDeleted => "vault_deleted",
+            AuditType::VaultDeletionScheduled => "vault_deletion_scheduled",
+            AuditType::VaultDeletionCancelled => "vault_deletion_cancelled",
             AuditType::EnvelopeCreated => "envelope_created",
             AuditType::EnvelopeDeleted => "envelope_deleted",
             AuditType::EnvelopeReplaced => "envelope_replaced",

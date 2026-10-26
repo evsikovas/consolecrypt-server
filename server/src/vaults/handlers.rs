@@ -3,7 +3,7 @@
 
 //! `/v1/vaults/*` handlers.
 
-use super::access::{require_trusted_with_key, VaultAccess};
+use super::access::{require_access_key, require_trusted_with_key, VaultAccess};
 use super::envelopes::{self, Visibility};
 use crate::audit::{AuditEvent, AuditType};
 use crate::auth::AuthContext;
@@ -14,15 +14,16 @@ use crate::extract::{ApiJson, ApiJsonOrDefault, ApiPath, ClientIp};
 use crate::state::AppState;
 use crate::util::enum_str;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use cc_protocol::envelopes::{KeyEnvelope, RecipientType};
 use cc_protocol::limits;
 use cc_protocol::vaults::{
-    CreateEnvelopeRequest, CreateVaultRequest, DeleteEnvelopeRequest, DeleteVaultRequest,
-    ListEnvelopesResponse, ListVaultsResponse, VaultInfo, VaultRole, VaultState,
+    CancelVaultDeletionRequest, CreateEnvelopeRequest, CreateVaultRequest, DeleteEnvelopeRequest,
+    DeleteVaultRequest, ListEnvelopesResponse, ListVaultsResponse, VaultInfo, VaultRole,
+    VaultState,
 };
-use cc_protocol::{EnvelopeId, ErrorCode, VaultId};
+use cc_protocol::{EnvelopeId, ErrorCode, ProtocolVersion, VaultId};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -204,32 +205,25 @@ pub async fn get_vault(
     Ok(Json(access.info()))
 }
 
-/// `DELETE /v1/vaults/{vault_id}` → `204`. T(V) + K(V): soft delete; the
-/// ciphertext is purged by the retention job.
-pub async fn delete_vault(
-    State(state): State<AppState>,
-    auth: AuthContext,
-    ClientIp(ip): ClientIp,
-    ApiPath(vault_id): ApiPath<VaultId>,
-    ApiJsonOrDefault(req): ApiJsonOrDefault<DeleteVaultRequest>,
-) -> AppResult<StatusCode> {
-    // TODO(server): untrusted `pending_deletion` with a grace period — deferred
-    // because cancelling needs a protocol addition (ADR-0202 §Vault deletion);
-    // next: add the cancel route with Client Dev, then schedule here.
-    let vak = req
-        .vault_access_key
-        .ok_or_else(|| AppError::bad_request("vault_access_key is required"))?;
-    let access = require_trusted_with_key(&state, &auth, ip, vault_id, &vak).await?;
-    if access.role != VaultRole::Owner {
-        return Err(AppError::forbidden("only the owner can delete a vault"));
-    }
-    let mut tx = state.db.begin().await?;
+/// The calling client speaks protocol 1.13 or later (pending deletion).
+fn knows_pending_deletion(headers: &HeaderMap) -> bool {
+    headers
+        .get(cc_protocol::version::HEADER_PROTOCOL_VERSION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<ProtocolVersion>().ok())
+        .is_some_and(|v| v.major == 1 && v.minor >= 13)
+}
+
+/// Marks a vault deleted (soft delete; the retention job purges it) and
+/// rejects pending trust requests that only concerned deleted vaults.
+pub(crate) async fn mark_deleted(conn: &mut sqlx::PgConnection, vault_id: Uuid) -> AppResult<()> {
     sqlx::query(
-        "UPDATE vaults SET state = 'deleted', deleted_at = now(), updated_at = now()
+        "UPDATE vaults SET state = 'deleted', deleted_at = now(), updated_at = now(),
+                deletion_scheduled_at = NULL
           WHERE id = $1 AND state <> 'deleted'",
     )
-    .bind(Uuid::from(vault_id))
-    .execute(&mut *tx)
+    .bind(vault_id)
+    .execute(&mut *conn)
     .await?;
     sqlx::query(
         "UPDATE device_requests SET status = 'rejected', decided_at = now()
@@ -239,10 +233,68 @@ pub async fn delete_vault(
                              JOIN vaults v ON v.id = rv.vault_id
                             WHERE rv.request_id = device_requests.id AND v.state <> 'deleted')",
     )
+    .bind(vault_id)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `DELETE /v1/vaults/{vault_id}`: owner + K(V). From a trusted device →
+/// `204`, soft delete (the retention job purges the ciphertext). From an
+/// untrusted device of a 1.13 client → `202` + `VaultInfo`: `pending_deletion`
+/// for `VAULT_DELETION_GRACE_DAYS` unless a trusted device cancels; older
+/// clients get `403` there as before.
+pub async fn delete_vault(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+    ApiPath(vault_id): ApiPath<VaultId>,
+    ApiJsonOrDefault(req): ApiJsonOrDefault<DeleteVaultRequest>,
+) -> AppResult<(StatusCode, Json<Option<VaultInfo>>)> {
+    let vak = req
+        .vault_access_key
+        .ok_or_else(|| AppError::bad_request("vault_access_key is required"))?;
+    let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
+    if !access.trusted && !knows_pending_deletion(&headers) {
+        access.require_trusted()?;
+    }
+    require_access_key(
+        &state,
+        &auth,
+        ip,
+        &access,
+        &vak,
+        AuditType::VaultProofFailed,
+    )
+    .await?;
+    if access.role != VaultRole::Owner {
+        return Err(AppError::forbidden("only the owner can delete a vault"));
+    }
+    let mut tx = state.db.begin().await?;
+    if access.trusted {
+        mark_deleted(&mut tx, Uuid::from(vault_id)).await?;
+        AuditEvent::new(AuditType::VaultDeleted)
+            .user(auth.user_id)
+            .device(auth.device_id)
+            .target(vault_id)
+            .ip(ip)
+            .record(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok((StatusCode::NO_CONTENT, Json(None)));
+    }
+    // A second request keeps the first schedule (it cannot postpone it).
+    sqlx::query(
+        "UPDATE vaults SET state = 'pending_deletion', updated_at = now(),
+                deletion_scheduled_at = now() + make_interval(days => $2)
+          WHERE id = $1 AND state = 'active'",
+    )
     .bind(Uuid::from(vault_id))
+    .bind(cc_protocol::vaults::VAULT_DELETION_GRACE_DAYS as i32)
     .execute(&mut *tx)
     .await?;
-    AuditEvent::new(AuditType::VaultDeleted)
+    AuditEvent::new(AuditType::VaultDeletionScheduled)
         .user(auth.user_id)
         .device(auth.device_id)
         .target(vault_id)
@@ -250,7 +302,49 @@ pub async fn delete_vault(
         .record(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
+    Ok((StatusCode::ACCEPTED, Json(Some(access.info()))))
+}
+
+/// `POST /v1/vaults/{vault_id}/deletion/cancel` → `VaultInfo` (protocol
+/// 1.13): owner, trusted device + K(V); the vault is active again.
+pub async fn cancel_vault_deletion(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    ClientIp(ip): ClientIp,
+    ApiPath(vault_id): ApiPath<VaultId>,
+    ApiJson(req): ApiJson<CancelVaultDeletionRequest>,
+) -> AppResult<Json<VaultInfo>> {
+    let access =
+        require_trusted_with_key(&state, &auth, ip, vault_id, &req.vault_access_key).await?;
+    if access.role != VaultRole::Owner {
+        return Err(AppError::forbidden("only the owner can cancel a deletion"));
+    }
+    let mut tx = state.db.begin().await?;
+    let cancelled = sqlx::query(
+        "UPDATE vaults SET state = 'active', deletion_scheduled_at = NULL, updated_at = now()
+          WHERE id = $1 AND state = 'pending_deletion'",
+    )
+    .bind(Uuid::from(vault_id))
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if cancelled == 0 {
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            "the vault has no pending deletion",
+        ));
+    }
+    AuditEvent::new(AuditType::VaultDeletionCancelled)
+        .user(auth.user_id)
+        .device(auth.device_id)
+        .target(vault_id)
+        .ip(ip)
+        .record(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let access = VaultAccess::load(&state.db, &auth, vault_id).await?;
+    Ok(Json(access.info()))
 }
 
 /// `GET /v1/vaults/{vault_id}/envelopes`: trusted → all live envelopes;

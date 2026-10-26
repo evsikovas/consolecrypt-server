@@ -33,6 +33,8 @@ pub const DEVICES_DENY: &str = "/v1/devices/deny";
 
 pub const VAULTS: &str = "/v1/vaults";
 pub const VAULT: &str = "/v1/vaults/{vault_id}";
+/// Cancel a pending vault deletion (protocol 1.13).
+pub const VAULT_DELETION_CANCEL: &str = "/v1/vaults/{vault_id}/deletion/cancel";
 pub const VAULT_ENVELOPES: &str = "/v1/vaults/{vault_id}/envelopes";
 pub const VAULT_ENVELOPE: &str = "/v1/vaults/{vault_id}/envelopes/{envelope_id}";
 /// Signed key-commitment records (protocol 1.11).

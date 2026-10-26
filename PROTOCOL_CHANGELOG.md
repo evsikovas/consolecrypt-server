@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Protocol 1.13 (2026-10-26, server 0.2.4, additive): **pending vault
+  deletion** (ADR-0202 §Vault deletion). Capability
+  `capabilities.vault_pending_deletion`.
+  - `DELETE /v1/vaults/{vault_id}` from an untrusted device of the owner
+    (with the vault access key, i.e. after unlocking) by a client sending
+    `x-cc-protocol-version: 1.13` or later → `202` + `VaultInfo` in
+    `pending_deletion` with `deletion_scheduled_at` =
+    now + `VAULT_DELETION_GRACE_DAYS` (7). A repeat keeps the first date.
+    Older clients still get `403` from an untrusted device; a trusted
+    device deletes at once (`204`) as before.
+  - `POST /v1/vaults/{vault_id}/deletion/cancel`
+    (`CancelVaultDeletionRequest { vault_access_key }`, owner, trusted
+    device) → `VaultInfo`, active again; `409 conflict` when nothing is
+    pending, `410` once deleted.
+  - The maintenance pass deletes vaults whose `deletion_scheduled_at` has
+    passed (`MaintenanceReport.vault_deletions_completed`). Audit types
+    `vault_deletion_scheduled`, `vault_deletion_cancelled`.
+
 - Protocol 1.12 (2026-10-26, server 0.2.4, additive): **team key
   commitments** (security review SEC-03b). Capability
   `capabilities.team_key_commitment`.
