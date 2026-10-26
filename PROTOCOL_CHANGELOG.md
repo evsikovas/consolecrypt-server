@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Protocol 1.13 (2026-10-26, server 0.2.4, additive): **pending vault
-  deletion** (ADR-0202 §Vault deletion). Capability
+  deletion** (ADR-0202 §Vault deletion) and **device app versions**. Capability
   `capabilities.vault_pending_deletion`.
   - `DELETE /v1/vaults/{vault_id}` from an untrusted device of the owner
     (with the vault access key, i.e. after unlocking) by a client sending
@@ -19,6 +19,11 @@
   - The maintenance pass deletes vaults whose `deletion_scheduled_at` has
     passed (`MaintenanceReport.vault_deletions_completed`). Audit types
     `vault_deletion_scheduled`, `vault_deletion_cancelled`.
+  - `DeviceInfo.client_version`: the app version the device last reported
+    (`DeviceRegistration.client_version`, and now also
+    `x-cc-client-version` on authenticated requests). Clients use it to keep
+    vault objects that older apps cannot read (database connections of
+    engines added after 0.9.1) off accounts that still run such apps.
 
 - Protocol 1.12 (2026-10-26, server 0.2.4, additive): **team key
   commitments** (security review SEC-03b). Capability

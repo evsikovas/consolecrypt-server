@@ -117,10 +117,22 @@ pub(crate) async fn lookup(
     span.record("device_id", tracing::field::display(ctx.device_id));
 
     if state.should_touch_device(ctx.device_id) {
-        sqlx::query("UPDATE devices SET last_seen_at = now() WHERE id = $1")
-            .bind(row.device_id)
-            .execute(&state.db)
-            .await?;
+        // The app version shown to the account's other devices (1.13).
+        let client_version = parts
+            .headers
+            .get(cc_protocol::version::HEADER_CLIENT_VERSION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty() && v.len() <= 64 && v.bytes().all(|b| b.is_ascii_graphic()));
+        sqlx::query(
+            "UPDATE devices SET last_seen_at = now(),
+                    client_version = COALESCE($2, client_version)
+              WHERE id = $1",
+        )
+        .bind(row.device_id)
+        .bind(client_version)
+        .execute(&state.db)
+        .await?;
     }
     Ok((ctx, row.signing_public_key))
 }

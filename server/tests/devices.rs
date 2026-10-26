@@ -423,3 +423,33 @@ async fn rename_device() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// Protocol 1.13: devices report the app version they last ran, from the
+/// registration and from `x-cc-client-version` on authenticated requests.
+#[tokio::test]
+async fn devices_report_their_app_version() {
+    let srv = server!();
+    let a = srv.new_account().await;
+    let phone = srv.new_device_session(&a, "phone").await;
+    // The phone's first request after an upgrade carries the new version.
+    let req = srv
+        .http
+        .get(srv.url(paths::DEVICES))
+        .bearer_auth(&phone.access)
+        .header("x-cc-client-version", "0.9.3");
+    let resp = srv
+        .signed(req, &phone.access, "GET", paths::DEVICES, b"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list = devices(&srv, &a).await;
+    let version = |id| {
+        list.devices
+            .iter()
+            .find(|d| d.device_id == id)
+            .and_then(|d| d.client_version.clone())
+    };
+    assert_eq!(version(a.device.id).as_deref(), Some("0.0.0-test"));
+    assert_eq!(version(phone.device.id).as_deref(), Some("0.9.3"));
+}
