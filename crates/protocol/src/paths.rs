@@ -43,6 +43,7 @@ pub const TEAMS: &str = "/v1/teams";
 pub const TEAM: &str = "/v1/teams/{vault_id}";
 pub const TEAM_LOG: &str = "/v1/teams/{vault_id}/log";
 pub const TEAM_KEY: &str = "/v1/teams/{vault_id}/key";
+pub const TEAM_KEY_COMMITMENT: &str = "/v1/teams/{vault_id}/key-commitment";
 pub const TEAM_INVITATIONS: &str = "/v1/teams/{vault_id}/invitations";
 pub const TEAM_INVITATIONS_INBOX: &str = "/v1/teams/invitations";
 pub const TEAM_INVITATION: &str = "/v1/teams/invitations/{invitation_id}";

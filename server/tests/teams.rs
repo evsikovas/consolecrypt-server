@@ -801,3 +801,161 @@ async fn admins_come_only_from_the_owner_and_invitees_are_verified() {
         "no invitation mail"
     );
 }
+
+/// Protocol 1.12 (security review SEC-03b): signed team key commitments are
+/// checked (epoch, signer, signature), stored per epoch, served with the
+/// key, and only owners or admins may publish one.
+#[tokio::test]
+async fn team_key_commitments_are_checked_and_served() {
+    use cc_protocol::teams::{team_key_commitment_message, TeamKeyCommitment};
+    let Some(srv) = TestServer::spawn(|_| {}).await else {
+        return;
+    };
+    let a = srv.new_account().await;
+    let b = verified(&srv, srv.new_account().await).await;
+    let (ka, kb) = (TeamKey::new(a.user_id), TeamKey::new(b.user_id));
+    let team = TestVault::new();
+    let commit = |k: &TeamKey, epoch: u32, value: [u8; 32]| TeamKeyCommitment {
+        key_epoch: epoch,
+        commitment: Bytes::new(value.to_vec()),
+        signer_user_id: k.user,
+        signature: Bytes::new(
+            k.signing
+                .sign(&team_key_commitment_message(team.id, epoch, &value, k.user))
+                .to_bytes()
+                .to_vec(),
+        ),
+    };
+    let genesis = ka.sign(
+        team.id,
+        0,
+        &[0; 32],
+        TeamLogOp::Genesis { owner: ka.keys() },
+    );
+    let create = |kc: TeamKeyCommitment| {
+        json!({
+            "vault_id": team.id,
+            "vault_access_key": team.vak_bytes(),
+            "genesis": genesis,
+            "owner_envelope": user_envelope(a.user_id),
+            "device_envelope": device_envelope(a.device.id),
+            "key_commitment": kc,
+        })
+    };
+    // A commitment signed by someone else is refused, and nothing is created.
+    let (st, _) = srv
+        .post(
+            paths::TEAMS,
+            Some(&a.access),
+            &create(commit(&kb, 0, [1; 32])),
+        )
+        .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let mut forged = commit(&ka, 0, [1; 32]);
+    forged.commitment = Bytes::new(vec![2; 32]);
+    let (st, _) = srv
+        .post(paths::TEAMS, Some(&a.access), &create(forged))
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (st, info) = srv
+        .post(
+            paths::TEAMS,
+            Some(&a.access),
+            &create(commit(&ka, 0, [1; 32])),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{info}");
+    let (_, key) = srv
+        .get(&team_path(paths::TEAM_KEY, team.id), &a.access)
+        .await;
+    assert_eq!(key["key_commitment"]["key_epoch"], 0);
+    assert_eq!(
+        key["key_commitment"]["commitment"],
+        json!(Bytes::new(vec![1; 32]))
+    );
+
+    // A viewer cannot publish one; the owner can replace it.
+    let mut head = hash(&genesis);
+    let mut seq = 0;
+    let st = add_member(
+        &srv,
+        &team,
+        &a,
+        (&a, &ka),
+        (&b, &kb),
+        VaultRole::Viewer,
+        &mut head,
+        &mut seq,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let put = team_path(paths::TEAM_KEY_COMMITMENT, team.id);
+    let (st, _) = srv
+        .request(
+            reqwest::Method::PUT,
+            &put,
+            Some(&b.access),
+            Some(&json!({"vault_access_key": team.vak_bytes(), "key_commitment": commit(&kb, 0, [3; 32])})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (st, _) = srv
+        .request(
+            reqwest::Method::PUT,
+            &put,
+            Some(&a.access),
+            Some(&json!({"vault_access_key": team.vak_bytes(), "key_commitment": commit(&ka, 1, [3; 32])})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "not the current epoch");
+    let (st, body) = srv
+        .request(
+            reqwest::Method::PUT,
+            &put,
+            Some(&a.access),
+            Some(&json!({"vault_access_key": team.vak_bytes(), "key_commitment": commit(&ka, 0, [3; 32])})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT, "{body}");
+    let (_, key) = srv
+        .get(&team_path(paths::TEAM_KEY, team.id), &b.access)
+        .await;
+    assert_eq!(
+        key["key_commitment"]["commitment"],
+        json!(Bytes::new(vec![3; 32]))
+    );
+
+    // A rotation carries the new epoch's commitment.
+    let new_vak = random::<32>();
+    let rotate = ka.sign(
+        team.id,
+        seq + 1,
+        &head,
+        TeamLogOp::RotateKey { key_epoch: 1 },
+    );
+    let link = TeamKeyChainLink {
+        key_epoch: 1,
+        nonce: Bytes::new(random::<24>().to_vec()),
+        ciphertext: Bytes::new(random::<48>().to_vec()),
+    };
+    let (st, res) = srv
+        .post(
+            &team_path(paths::TEAM_LOG, team.id),
+            Some(&a.access),
+            &json!({"entry": rotate, "vault_access_key": team.vak_bytes(),
+                    "new_vault_access_key": Bytes::new(new_vak.to_vec()), "chain_link": link,
+                    "envelopes": [user_envelope(a.user_id), user_envelope(b.user_id)],
+                    "key_commitment": commit(&ka, 1, [4; 32])}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{res}");
+    let (_, key) = srv
+        .get(&team_path(paths::TEAM_KEY, team.id), &b.access)
+        .await;
+    assert_eq!(key["key_epoch"], 1);
+    assert_eq!(key["key_commitment"]["key_epoch"], 1);
+    assert_eq!(
+        key["key_commitment"]["commitment"],
+        json!(Bytes::new(vec![4; 32]))
+    );
+}

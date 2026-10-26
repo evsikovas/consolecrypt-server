@@ -20,9 +20,10 @@ use axum::{Json, Router};
 use cc_protocol::envelopes::{NewEnvelope, RecipientType};
 use cc_protocol::events::ServerEvent;
 use cc_protocol::teams::{
-    AcceptTeamInvitationRequest, CreateTeamRequest, InviteTeamMemberRequest,
-    ListTeamInvitationsResponse, ListTeamsResponse, SignedTeamLogEntry, SubmitTeamLogRequest,
-    SubmitTeamLogResponse, TeamDetail, TeamInfo, TeamInvitation, TeamKeyChainLink, TeamKeyMaterial,
+    team_key_commitment_message, AcceptTeamInvitationRequest, CreateTeamRequest,
+    InviteTeamMemberRequest, ListTeamInvitationsResponse, ListTeamsResponse,
+    PutTeamKeyCommitmentRequest, SignedTeamLogEntry, SubmitTeamLogRequest, SubmitTeamLogResponse,
+    TeamDetail, TeamInfo, TeamInvitation, TeamKeyChainLink, TeamKeyCommitment, TeamKeyMaterial,
     TeamLogOp, TeamLogPage, TeamLogQuery, TeamMember, TeamMemberKeys, MAX_INVITATION_NOTE_CHARS,
     MAX_TEAM_LOG_PAGE,
 };
@@ -51,6 +52,10 @@ pub fn routes() -> Router<AppState> {
         .route(paths::TEAM, get(get_team))
         .route(paths::TEAM_LOG, get(get_log).post(submit_log))
         .route(paths::TEAM_KEY, get(get_key))
+        .route(
+            paths::TEAM_KEY_COMMITMENT,
+            axum::routing::put(put_key_commitment),
+        )
         .route(
             paths::TEAM_INVITATIONS,
             get(list_team_invitations).post(invite),
@@ -300,6 +305,17 @@ pub async fn create_team(
         .execute(&mut *tx)
         .await?;
     insert_log(&mut tx, req.vault_id, &req.genesis, &head).await?;
+    if let Some(kc) = &req.key_commitment {
+        store_key_commitment(
+            &mut tx,
+            req.vault_id,
+            kc,
+            0,
+            auth.user_id,
+            owner.signing_key.as_slice(),
+        )
+        .await?;
+    }
     store_user_envelope(&mut tx, req.vault_id, &req.owner_envelope, &auth, 0).await?;
     envelopes::store(
         &mut tx,
@@ -346,6 +362,111 @@ async fn insert_log(
         .execute(&mut *conn)
         .await?;
     Ok(())
+}
+
+/// Protocol 1.12: check `kc` — the commitment of `key_epoch` signed by
+/// `signer` with `signer_key`, their per-team key from the log — and store
+/// it, replacing an older one for that epoch.
+async fn store_key_commitment(
+    conn: &mut PgConnection,
+    vault_id: VaultId,
+    kc: &TeamKeyCommitment,
+    key_epoch: u32,
+    signer: UserId,
+    signer_key: &[u8],
+) -> AppResult<()> {
+    kc.validate()
+        .map_err(|e| AppError::bad_request(e.to_string()))?;
+    if kc.key_epoch != key_epoch || kc.signer_user_id != signer {
+        return Err(AppError::bad_request(
+            "key_commitment must be for the current epoch and signed by the caller",
+        ));
+    }
+    let message = team_key_commitment_message(
+        vault_id,
+        kc.key_epoch,
+        kc.commitment.as_slice(),
+        kc.signer_user_id,
+    );
+    if !crypto::verify_ed25519(signer_key, &message, kc.signature.as_slice()) {
+        return Err(AppError::forbidden("key commitment signature is invalid")
+            .with_details(serde_json::json!({"reason": "team_log"})));
+    }
+    sqlx::query(
+        "INSERT INTO team_key_commitments (vault_id, key_epoch, commitment, signer_user_id, signature)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (vault_id, key_epoch) DO UPDATE
+            SET commitment = EXCLUDED.commitment, signer_user_id = EXCLUDED.signer_user_id,
+                signature = EXCLUDED.signature, created_at = now()",
+    )
+    .bind(Uuid::from(vault_id))
+    .bind(i32::try_from(key_epoch).unwrap_or(i32::MAX))
+    .bind(kc.commitment.as_slice())
+    .bind(Uuid::from(kc.signer_user_id))
+    .bind(kc.signature.as_slice())
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+async fn load_key_commitment<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    vault_id: VaultId,
+    key_epoch: i32,
+) -> AppResult<Option<TeamKeyCommitment>> {
+    let row: Option<(i32, Vec<u8>, Uuid, Vec<u8>)> = sqlx::query_as(
+        "SELECT key_epoch, commitment, signer_user_id, signature FROM team_key_commitments
+          WHERE vault_id = $1 AND key_epoch = $2",
+    )
+    .bind(Uuid::from(vault_id))
+    .bind(key_epoch)
+    .fetch_optional(db)
+    .await?;
+    Ok(
+        row.map(|(e, commitment, signer, signature)| TeamKeyCommitment {
+            key_epoch: u32::try_from(e).unwrap_or(0),
+            commitment: Bytes::new(commitment),
+            signer_user_id: signer.into(),
+            signature: Bytes::new(signature),
+        }),
+    )
+}
+
+/// `PUT /v1/teams/{vault_id}/key-commitment` → `204` (protocol 1.12): an
+/// owner or admin publishes the commitment of the current key epoch.
+pub async fn put_key_commitment(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    ApiPath(vault_id): ApiPath<VaultId>,
+    ApiJson(req): ApiJson<PutTeamKeyCommitmentRequest>,
+) -> AppResult<StatusCode> {
+    require_enabled(&state)?;
+    let mut tx = state.db.begin().await?;
+    let st = log_state(&mut tx, vault_id).await?;
+    let row = load_team(&mut *tx, &auth, vault_id).await?;
+    require_admin(&row)?;
+    if !crypto::verify_vault_access_key(req.vault_access_key.as_slice(), &row.access_key_verifier) {
+        state
+            .limits
+            .proof_device
+            .check(&Uuid::from(auth.device_id))?;
+        return Err(AppError::invalid_proof("invalid vault access key"));
+    }
+    let me = st
+        .members
+        .get(&auth.user_id)
+        .ok_or_else(AppError::not_found)?;
+    store_key_commitment(
+        &mut tx,
+        vault_id,
+        &req.key_commitment,
+        u32::try_from(row.key_epoch).unwrap_or(0),
+        auth.user_id,
+        &me.signing_key,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `GET /v1/teams` → teams the caller is a member of.
@@ -437,8 +558,10 @@ pub async fn get_key(
     .bind(Uuid::from(vault_id))
     .fetch_all(&state.db)
     .await?;
+    let key_commitment = load_key_commitment(&state.db, vault_id, row.key_epoch).await?;
     Ok(Json(TeamKeyMaterial {
         key_epoch: u32::try_from(row.key_epoch).unwrap_or(0),
+        key_commitment,
         envelope,
         chain: chain
             .into_iter()
@@ -1019,6 +1142,14 @@ pub async fn submit_log(
             }
             for env in &req.envelopes {
                 store_user_envelope(&mut tx, vault_id, env, &auth, *key_epoch).await?;
+            }
+            if let Some(kc) = &req.key_commitment {
+                let key = st
+                    .members
+                    .get(&auth.user_id)
+                    .map(|m| m.signing_key.clone())
+                    .unwrap_or_default();
+                store_key_commitment(&mut tx, vault_id, kc, *key_epoch, auth.user_id, &key).await?;
             }
             sqlx::query(
                 "INSERT INTO team_key_chain (vault_id, key_epoch, nonce, ciphertext)

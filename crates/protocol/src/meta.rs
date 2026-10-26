@@ -70,6 +70,11 @@ pub struct ServerCapabilities {
     /// key on first use and confirm it with the next passphrase unlock.
     #[serde(default)]
     pub vrk_commitment: bool,
+    /// Team key commitments (protocol 1.12): `TeamKeyMaterial.key_commitment`,
+    /// `CreateTeamRequest.key_commitment`, `SubmitTeamLogRequest.key_commitment`
+    /// and `PUT /v1/teams/{id}/key-commitment`.
+    #[serde(default)]
+    pub team_key_commitment: bool,
 }
 
 /// `capabilities.auth` (protocol 1.9): the sign-in method of this server.
