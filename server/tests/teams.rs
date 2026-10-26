@@ -90,14 +90,24 @@ fn team_path(template: &str, vault: VaultId) -> String {
     paths::fill(template, &[("vault_id", &vault.to_string())])
 }
 
+/// Mark `s`'s address as verified (invitations go only to such accounts).
+async fn verified(srv: &TestServer, s: Session) -> Session {
+    sqlx::query("UPDATE users SET email_verified_at = now() WHERE id = $1")
+        .bind(uuid::Uuid::from(s.user_id))
+        .execute(&srv.state.db)
+        .await
+        .unwrap();
+    s
+}
+
 #[tokio::test]
 async fn team_lifecycle() {
     let Some(srv) = TestServer::spawn(|_| {}).await else {
         return;
     };
     let a = srv.new_account().await;
-    let b = srv.new_account().await;
-    let c = srv.new_account().await;
+    let b = verified(&srv, srv.new_account().await).await;
+    let c = verified(&srv, srv.new_account().await).await;
     let ka = TeamKey::new(a.user_id);
     let kb = TeamKey::new(b.user_id);
     let team = TestVault::new();
@@ -436,7 +446,7 @@ async fn team_envelopes_are_self_service_only() {
         return;
     };
     let a = srv.new_account().await;
-    let b = srv.new_account().await;
+    let b = verified(&srv, srv.new_account().await).await;
     let ka = TeamKey::new(a.user_id);
     let kb = TeamKey::new(b.user_id);
     let team = TestVault::new();
@@ -585,4 +595,209 @@ async fn team_envelopes_are_self_service_only() {
         .delete(&envelope_path(&own_device), &b.access, Some(&vak))
         .await;
     assert_eq!(st, StatusCode::NO_CONTENT, "{body}");
+}
+
+/// Invite `who` as `role`, let them accept, and submit the `AddMember` entry
+/// signed by `signer`. Returns the log status and advances `head`/`seq` on
+/// success.
+#[allow(clippy::too_many_arguments)]
+async fn add_member(
+    srv: &TestServer,
+    team: &TestVault,
+    inviter: &Session,
+    signer: (&Session, &TeamKey),
+    who: (&Session, &TeamKey),
+    role: VaultRole,
+    head: &mut [u8; 32],
+    seq: &mut u64,
+) -> StatusCode {
+    let (st, body) = srv
+        .post(
+            &team_path(paths::TEAM_INVITATIONS, team.id),
+            Some(&inviter.access),
+            &json!({"email": who.0.email, "role": role}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{body}");
+    let (_, inbox) = srv.get(paths::TEAM_INVITATIONS_INBOX, &who.0.access).await;
+    let inv_id = inbox["invitations"][0]["invitation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let keys = who.1.keys();
+    let (st, _) = srv
+        .post(
+            &paths::fill(paths::TEAM_INVITATION_ACCEPT, &[("invitation_id", &inv_id)]),
+            Some(&who.0.access),
+            &json!({"encryption_key": keys.encryption_key, "signing_key": keys.signing_key}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let add = signer.1.sign(
+        team.id,
+        *seq + 1,
+        head,
+        TeamLogOp::AddMember { member: keys, role },
+    );
+    let (st, _) = srv
+        .post(
+            &team_path(paths::TEAM_LOG, team.id),
+            Some(&signer.0.access),
+            &json!({"entry": add, "vault_access_key": team.vak_bytes(),
+                    "invitation_id": inv_id, "envelopes": [user_envelope(who.0.user_id)]}),
+        )
+        .await;
+    if st == StatusCode::OK {
+        *head = hash(&add);
+        *seq += 1;
+    }
+    st
+}
+
+/// Security review SEC-09 and SEC-10: only the owner appoints admins (as
+/// every client's log check requires — an entry they all refuse would stop
+/// the team), and invitations go only to accounts with a verified address.
+#[tokio::test]
+async fn admins_come_only_from_the_owner_and_invitees_are_verified() {
+    let Some(srv) = TestServer::spawn(|_| {}).await else {
+        return;
+    };
+    let a = srv.new_account().await;
+    let b = verified(&srv, srv.new_account().await).await;
+    let c = verified(&srv, srv.new_account().await).await;
+    let d = verified(&srv, srv.new_account().await).await;
+    let (ka, kb, kc, kd) = (
+        TeamKey::new(a.user_id),
+        TeamKey::new(b.user_id),
+        TeamKey::new(c.user_id),
+        TeamKey::new(d.user_id),
+    );
+    let team = TestVault::new();
+    let genesis = ka.sign(
+        team.id,
+        0,
+        &[0; 32],
+        TeamLogOp::Genesis { owner: ka.keys() },
+    );
+    let (st, info) = srv
+        .post(
+            paths::TEAMS,
+            Some(&a.access),
+            &json!({
+                "vault_id": team.id,
+                "vault_access_key": team.vak_bytes(),
+                "genesis": genesis,
+                "owner_envelope": user_envelope(a.user_id),
+                "device_envelope": device_envelope(a.device.id),
+            }),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{info}");
+    let mut head = hash(&genesis);
+    let mut seq = 0;
+    let owner = (&a, &ka);
+    // The owner adds an admin and an editor.
+    let st = add_member(
+        &srv,
+        &team,
+        &a,
+        owner,
+        (&b, &kb),
+        VaultRole::Admin,
+        &mut head,
+        &mut seq,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let st = add_member(
+        &srv,
+        &team,
+        &a,
+        owner,
+        (&c, &kc),
+        VaultRole::Editor,
+        &mut head,
+        &mut seq,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    // SEC-09: the admin cannot promote the editor to admin …
+    let log = team_path(paths::TEAM_LOG, team.id);
+    let promote = kb.sign(
+        team.id,
+        seq + 1,
+        &head,
+        TeamLogOp::ChangeRole {
+            user_id: c.user_id,
+            role: VaultRole::Admin,
+        },
+    );
+    let (st, body) = srv
+        .post(
+            &log,
+            Some(&b.access),
+            &json!({"entry": promote, "vault_access_key": team.vak_bytes()}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{body}");
+    // … nor add an admin, even with the owner's admin invitation.
+    let st = add_member(
+        &srv,
+        &team,
+        &a,
+        (&b, &kb),
+        (&d, &kd),
+        VaultRole::Admin,
+        &mut head,
+        &mut seq,
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    // The owner still can.
+    let promote = ka.sign(
+        team.id,
+        seq + 1,
+        &head,
+        TeamLogOp::ChangeRole {
+            user_id: c.user_id,
+            role: VaultRole::Admin,
+        },
+    );
+    let (st, body) = srv
+        .post(
+            &log,
+            Some(&a.access),
+            &json!({"entry": promote, "vault_access_key": team.vak_bytes()}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+
+    // SEC-10: an account that never verified its address gets no invitation.
+    let unverified = srv.new_account().await;
+    let before = srv.mailer.messages.lock().unwrap().len();
+    let (st, _) = srv
+        .post(
+            &team_path(paths::TEAM_INVITATIONS, team.id),
+            Some(&a.access),
+            &json!({"email": unverified.email, "role": "viewer"}),
+        )
+        .await;
+    assert_eq!(
+        st,
+        StatusCode::ACCEPTED,
+        "same answer as an unknown address"
+    );
+    let (_, inbox) = srv
+        .get(paths::TEAM_INVITATIONS_INBOX, &unverified.access)
+        .await;
+    assert!(
+        inbox["invitations"].as_array().unwrap().is_empty(),
+        "{inbox}"
+    );
+    assert_eq!(
+        srv.mailer.messages.lock().unwrap().len(),
+        before,
+        "no invitation mail"
+    );
 }

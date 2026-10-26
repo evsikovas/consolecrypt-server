@@ -127,17 +127,26 @@ pub fn check_append(
     let target_live = |user: &UserId| state.members.get(user);
     match &e.op {
         TeamLogOp::Genesis { .. } => return Err(AppError::bad_request("genesis exists")),
-        TeamLogOp::AddMember { member, .. } => {
+        TeamLogOp::AddMember { member, role } => {
             if !admin(me.role) {
                 return Err(rejected("only admins add members"));
+            }
+            // Same rule as every client's log check (SEC-09).
+            if *role == VaultRole::Admin && me.role != VaultRole::Owner {
+                return Err(rejected("only the owner adds admins"));
             }
             if target_live(&member.user_id).is_some() {
                 return Err(AppError::already_exists("user_id", "already a member"));
             }
         }
-        TeamLogOp::ChangeRole { user_id, .. } => {
+        TeamLogOp::ChangeRole { user_id, role } => {
             if !admin(me.role) {
                 return Err(rejected("only admins change roles"));
+            }
+            // Clients refuse an admin appointed by anyone but the owner; an
+            // entry they all reject would stop the whole team (SEC-09).
+            if *role == VaultRole::Admin && me.role != VaultRole::Owner {
+                return Err(rejected("only the owner appoints admins"));
             }
             match target_live(user_id) {
                 None => return Err(AppError::not_found()),

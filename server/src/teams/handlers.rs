@@ -585,9 +585,13 @@ pub async fn invite(
             ),
         );
     }
+    // Only an account that proved it owns the address: otherwise anyone could
+    // register a colleague's email ahead of time and catch the invitation
+    // (SEC-10). Recipient lookup for sharing has the same rule.
     let invitee: Option<Uuid> = sqlx::query_scalar(
         "SELECT u.id FROM users u
           WHERE lower(u.email) = lower($1) AND u.status = 'active'
+            AND u.email_verified_at IS NOT NULL
             AND NOT EXISTS (SELECT 1 FROM vault_members m WHERE m.vault_id = $2
                              AND m.user_id = u.id AND m.revoked_at IS NULL)",
     )
