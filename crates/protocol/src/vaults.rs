@@ -74,13 +74,27 @@ pub struct ListVaultsResponse {
     pub vaults: Vec<VaultInfo>,
 }
 
-/// `DELETE /v1/vaults/{id}` body (optional). With a valid access key from a
-/// trusted device the vault is deleted immediately (soft delete, purged by
-/// retention job); otherwise it enters `pending_deletion`.
+/// Days a vault stays in `pending_deletion` before it is deleted.
+pub const VAULT_DELETION_GRACE_DAYS: u32 = 7;
+
+/// `DELETE /v1/vaults/{id}` body; the vault access key is required (the
+/// owner unlocked the vault). From a trusted device the vault is deleted
+/// immediately (`204`; soft delete, purged by the retention job). From an
+/// untrusted device of the owner (protocol 1.13 clients) it enters
+/// `pending_deletion` for [`VAULT_DELETION_GRACE_DAYS`] (`202`, `VaultInfo`
+/// with `deletion_scheduled_at`) unless a trusted device cancels; older
+/// clients get `403` from an untrusted device, as before.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeleteVaultRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_access_key: Option<Bytes>,
+}
+
+/// `POST /v1/vaults/{id}/deletion/cancel` (protocol 1.13) → `VaultInfo`.
+/// Owner, trusted device and vault access key; the vault is active again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelVaultDeletionRequest {
+    pub vault_access_key: Bytes,
 }
 
 /// `GET /v1/vaults/{id}/envelopes`

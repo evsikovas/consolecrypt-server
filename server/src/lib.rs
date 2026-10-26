@@ -121,6 +121,7 @@ pub fn build_router(state: AppState) -> Router {
         // vaults
         .route(paths::VAULTS, get(v::list_vaults).post(v::create_vault))
         .route(paths::VAULT, get(v::get_vault).delete(v::delete_vault))
+        .route(paths::VAULT_DELETION_CANCEL, post(v::cancel_vault_deletion))
         .route(
             paths::VAULT_ENVELOPES,
             get(v::list_envelopes).post(v::create_envelope),

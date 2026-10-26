@@ -75,6 +75,12 @@ pub struct ServerCapabilities {
     /// and `PUT /v1/teams/{id}/key-commitment`.
     #[serde(default)]
     pub team_key_commitment: bool,
+    /// Pending vault deletion (protocol 1.13): `DELETE /v1/vaults/{id}` from
+    /// an untrusted device of the owner schedules the deletion
+    /// (`pending_deletion`, `202`) and a trusted device cancels it with
+    /// `POST /v1/vaults/{id}/deletion/cancel`.
+    #[serde(default)]
+    pub vault_pending_deletion: bool,
 }
 
 /// `capabilities.auth` (protocol 1.9): the sign-in method of this server.
