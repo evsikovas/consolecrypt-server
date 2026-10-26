@@ -32,6 +32,8 @@ pub struct VaultAccess {
     pub trusted: bool,
     /// Vault epoch (protocol 1.3), rotated after a server restore.
     pub epoch: Uuid,
+    /// A Team Vault (`kind = 'team'`, protocol 1.10).
+    pub is_team: bool,
     access_key_verifier: Vec<u8>,
 }
 
@@ -47,6 +49,7 @@ struct AccessRow {
     last_sequence: i64,
     trusted: bool,
     epoch: Uuid,
+    is_team: bool,
 }
 
 impl VaultAccess {
@@ -60,6 +63,7 @@ impl VaultAccess {
         let row: Option<AccessRow> = sqlx::query_as(
             "SELECT v.owner_user_id, v.state, v.access_key_verifier, v.created_at, v.updated_at,
                     v.deletion_scheduled_at, v.epoch, m.role, s.last_sequence,
+                    v.kind = 'team' AS is_team,
                     EXISTS (SELECT 1 FROM vault_key_envelopes e
                              WHERE e.vault_id = v.id AND e.recipient_type = 'device'
                                AND e.recipient_id = $3 AND e.revoked_at IS NULL) AS trusted
@@ -89,6 +93,7 @@ impl VaultAccess {
             latest_sequence: row.last_sequence,
             trusted: row.trusted,
             epoch: row.epoch,
+            is_team: row.is_team,
             access_key_verifier: row.access_key_verifier,
         })
     }
