@@ -8,7 +8,7 @@
 
 use crate::audit::{AuditEvent, AuditType};
 use crate::auth::AuthContext;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiQuery, ClientIp};
 use crate::state::AppState;
 use crate::util::enum_str;
@@ -142,7 +142,15 @@ async fn replace(
         .account(state, crate::config::Limit::AccountSecurity, auth.user_id)
         .await?;
     envelopes::validate(&req.envelope, recipient_type)?;
-    require_trusted_with_key(state, auth, ip, req.vault_id, &req.vault_access_key).await?;
+    let access =
+        require_trusted_with_key(state, auth, ip, req.vault_id, &req.vault_access_key).await?;
+    // Members reach a Team Vault's key only through their user envelopes; a
+    // password or recovery envelope would let any member plant a key there.
+    if access.is_team {
+        return Err(AppError::bad_request(
+            "team vaults have no password or recovery envelopes",
+        ));
+    }
 
     let mut tx = state.db.begin().await?;
     // Serialise concurrent replacements of the same vault.

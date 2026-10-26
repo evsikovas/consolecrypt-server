@@ -426,3 +426,163 @@ async fn team_lifecycle() {
     assert_eq!(st, StatusCode::FORBIDDEN, "the owner cannot leave: {body}");
     let _: Value = body;
 }
+
+/// Security review SEC-04: in a Team Vault every member holds T(V) + K(V),
+/// so the generic envelope routes must not let one member delete or replace
+/// another member's envelopes, nor plant a password/recovery envelope.
+#[tokio::test]
+async fn team_envelopes_are_self_service_only() {
+    let Some(srv) = TestServer::spawn(|_| {}).await else {
+        return;
+    };
+    let a = srv.new_account().await;
+    let b = srv.new_account().await;
+    let ka = TeamKey::new(a.user_id);
+    let kb = TeamKey::new(b.user_id);
+    let team = TestVault::new();
+
+    let genesis = ka.sign(
+        team.id,
+        0,
+        &[0; 32],
+        TeamLogOp::Genesis { owner: ka.keys() },
+    );
+    let (st, info) = srv
+        .post(
+            paths::TEAMS,
+            Some(&a.access),
+            &json!({
+                "vault_id": team.id,
+                "vault_access_key": team.vak_bytes(),
+                "genesis": genesis,
+                "owner_envelope": user_envelope(a.user_id),
+                "device_envelope": device_envelope(a.device.id),
+            }),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{info}");
+    let head = hash(&genesis);
+
+    // b joins as a viewer and trusts a device.
+    let invitations = team_path(paths::TEAM_INVITATIONS, team.id);
+    let (st, _) = srv
+        .post(
+            &invitations,
+            Some(&a.access),
+            &json!({"email": b.email, "role": "viewer"}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::ACCEPTED);
+    let (_, inbox) = srv.get(paths::TEAM_INVITATIONS_INBOX, &b.access).await;
+    let inv_id = inbox["invitations"][0]["invitation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let accept = paths::fill(paths::TEAM_INVITATION_ACCEPT, &[("invitation_id", &inv_id)]);
+    let kb_keys = kb.keys();
+    let (st, _) = srv
+        .post(
+            &accept,
+            Some(&b.access),
+            &json!({"encryption_key": kb_keys.encryption_key, "signing_key": kb_keys.signing_key}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let add = ka.sign(
+        team.id,
+        1,
+        &head,
+        TeamLogOp::AddMember {
+            member: kb.keys(),
+            role: VaultRole::Viewer,
+        },
+    );
+    let (st, res) = srv
+        .post(
+            &team_path(paths::TEAM_LOG, team.id),
+            Some(&a.access),
+            &json!({"entry": add, "vault_access_key": team.vak_bytes(),
+                    "invitation_id": inv_id, "envelopes": [user_envelope(b.user_id)]}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{res}");
+    let (st, body) = srv.attest(&b, &team).await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+
+    let envelopes_path = team_path(paths::VAULT_ENVELOPES, team.id);
+    let (st, list) = srv.get(&envelopes_path, &b.access).await;
+    assert_eq!(st, StatusCode::OK, "{list}");
+    let find = |list: &Value, kind: &str, id: String| {
+        list["envelopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["recipient_type"] == kind && e["recipient_id"] == json!(id))
+            .map(|e| e["envelope_id"].as_str().unwrap().to_owned())
+    };
+    let owner_user = find(&list, "user", a.user_id.to_string()).expect("owner user envelope");
+    let owner_device =
+        find(&list, "device", a.device.id.to_string()).expect("owner device envelope");
+    let vak = json!({"vault_access_key": team.vak_bytes()});
+    let envelope_path = |id: &str| {
+        paths::fill(
+            paths::VAULT_ENVELOPE,
+            &[("vault_id", &team.id.to_string()), ("envelope_id", id)],
+        )
+    };
+
+    // The viewer cannot cut the owner off …
+    for id in [&owner_user, &owner_device] {
+        let (st, body) = srv.delete(&envelope_path(id), &b.access, Some(&vak)).await;
+        assert_eq!(st, StatusCode::FORBIDDEN, "{body}");
+    }
+    // … nor plant a key for the owner …
+    let (st, body) = srv
+        .post(
+            &envelopes_path,
+            Some(&b.access),
+            &json!({"vault_access_key": team.vak_bytes(), "envelope": user_envelope(a.user_id)}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{body}");
+    // … nor add a password or recovery envelope to the team.
+    for (path, envelope) in [
+        (paths::RECOVERY_VAULT_PASSWORD_REPLACE, password_envelope()),
+        (paths::RECOVERY_VAULT_RECOVERY_REPLACE, recovery_envelope()),
+    ] {
+        let (st, body) = srv
+            .post(
+                path,
+                Some(&b.access),
+                &json!({"vault_id": team.id, "vault_access_key": team.vak_bytes(),
+                        "envelope": envelope}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{path}: {body}");
+    }
+    // The owner's envelopes are intact.
+    let (_, after) = srv.get(&envelopes_path, &a.access).await;
+    assert!(
+        find(&after, "user", a.user_id.to_string()).is_some(),
+        "{after}"
+    );
+    assert!(
+        find(&after, "device", a.device.id.to_string()).is_some(),
+        "{after}"
+    );
+
+    // A member still manages their own envelopes.
+    let (st, body) = srv
+        .post(
+            &envelopes_path,
+            Some(&b.access),
+            &json!({"vault_access_key": team.vak_bytes(), "envelope": user_envelope(b.user_id)}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{body}");
+    let own_device = find(&after, "device", b.device.id.to_string()).expect("own device envelope");
+    let (st, body) = srv
+        .delete(&envelope_path(&own_device), &b.access, Some(&vak))
+        .await;
+    assert_eq!(st, StatusCode::NO_CONTENT, "{body}");
+}

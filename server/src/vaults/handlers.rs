@@ -320,7 +320,19 @@ pub async fn create_envelope(
             return Err(AppError::bad_request("recipient type not supported"))
         }
     }
-    require_trusted_with_key(&state, &auth, ip, vault_id, &req.vault_access_key).await?;
+    let access =
+        require_trusted_with_key(&state, &auth, ip, vault_id, &req.vault_access_key).await?;
+    // Every member of a Team Vault holds T(V) + K(V), whatever their role, so
+    // here they only re-key their own envelopes: other members' envelopes
+    // come only with a signed membership log entry (AddMember / RotateKey).
+    if access.is_team
+        && env.recipient_type == RecipientType::User
+        && env.recipient_id != Some(auth.user_id.into())
+    {
+        return Err(AppError::forbidden(
+            "team members' envelopes are written with the membership log",
+        ));
+    }
 
     let mut tx = state.db.begin().await?;
     if env.recipient_type == RecipientType::User {
@@ -363,10 +375,11 @@ pub async fn delete_envelope(
     ApiPath((vault_id, envelope_id)): ApiPath<(VaultId, EnvelopeId)>,
     ApiJson(req): ApiJson<DeleteEnvelopeRequest>,
 ) -> AppResult<StatusCode> {
-    require_trusted_with_key(&state, &auth, ip, vault_id, &req.vault_access_key).await?;
+    let access =
+        require_trusted_with_key(&state, &auth, ip, vault_id, &req.vault_access_key).await?;
     let mut tx = state.db.begin().await?;
-    let found: Option<(String,)> = sqlx::query_as(
-        "SELECT recipient_type FROM vault_key_envelopes
+    let found: Option<(String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT recipient_type, recipient_id FROM vault_key_envelopes
           WHERE id = $1 AND vault_id = $2 AND revoked_at IS NULL
           FOR UPDATE",
     )
@@ -374,11 +387,25 @@ pub async fn delete_envelope(
     .bind(Uuid::from(vault_id))
     .fetch_optional(&mut *tx)
     .await?;
-    let (recipient_type,) = found.ok_or_else(AppError::not_found)?;
+    let (recipient_type, recipient_id) = found.ok_or_else(AppError::not_found)?;
     if matches!(recipient_type.as_str(), "password" | "recovery") {
         return Err(AppError::bad_request(
             "the password/recovery envelope cannot be deleted; replace it instead",
         ));
+    }
+    // Team Vault: a member removes only their own user or device envelope;
+    // cutting another member off goes through RemoveMember in the log.
+    if access.is_team {
+        let own = match recipient_type.as_str() {
+            "user" => recipient_id == Some(auth.user_id.into()),
+            "device" => recipient_id == Some(auth.device_id.into()),
+            _ => false,
+        };
+        if !own {
+            return Err(AppError::forbidden(
+                "team members remove only their own envelopes",
+            ));
+        }
     }
     sqlx::query(
         "UPDATE vault_key_envelopes SET revoked_at = now(), revoke_reason = 'deleted' WHERE id = $1",
