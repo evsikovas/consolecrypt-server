@@ -164,6 +164,11 @@ pub struct DeviceInfo {
     /// (protocol 1.7, device protection only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quarantine_until: Option<Timestamp>,
+    /// App version the device last reported (`DeviceRegistration` or
+    /// `x-cc-client-version`), as sent; protocol 1.13. Clients use it to
+    /// keep vault objects that older apps cannot read off the account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

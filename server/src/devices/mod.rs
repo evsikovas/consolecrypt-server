@@ -305,10 +305,12 @@ pub(crate) struct DeviceRow {
     pub last_seen_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub quarantine_lifted_at: Option<DateTime<Utc>>,
+    pub client_version: Option<String>,
 }
 
 const DEVICE_COLUMNS: &str = "id, name, platform, encryption_public_key, signing_public_key, \
-                              created_at, last_seen_at, revoked_at, quarantine_lifted_at";
+                              created_at, last_seen_at, revoked_at, quarantine_lifted_at, \
+                              client_version";
 
 /// Map device id → vaults it currently holds a live device envelope for
 /// (excluding deleted vaults).
@@ -364,6 +366,7 @@ fn to_info(
         trusted: !trusted.is_empty(),
         quarantine_until,
         trusted_vaults: trusted,
+        client_version: row.client_version,
     })
 }
 
