@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Protocol 1.12 (2026-10-26, server 0.2.4, additive): **team key
+  commitments** (security review SEC-03b). Capability
+  `capabilities.team_key_commitment`.
+  - `TeamKeyCommitment { key_epoch, commitment (32), signer_user_id,
+    signature (64) }`: an owner or admin signs `team_key_commitment_message`
+    (`"consolecrypt/teams/v1/key-commitment\0" || vault_id || key_epoch BE
+    || commitment || signer_user_id`) with their per-team signing key from
+    the membership log. `commitment` is `HKDF(VRK)`, the vault key
+    commitment of 1.11.
+  - Optional `key_commitment` in `CreateTeamRequest` (epoch 0, by the owner)
+    and `SubmitTeamLogRequest` (`rotate_key`, by the actor, new epoch); the
+    server checks epoch, signer and signature and stores one per epoch.
+  - `PUT /v1/teams/{vault_id}/key-commitment` (`PutTeamKeyCommitmentRequest`,
+    owner/admin, VAK of the current epoch) → `204`: publish or replace the
+    commitment of the current epoch (teams created before 1.12).
+  - `TeamKeyMaterial.key_commitment`: the stored commitment of `key_epoch`.
+    Clients verify it with the signer's key from the log they verified and
+    refuse a VRK that does not match. Older clients ignore the fields.
+
 - Protocol 1.11 (2026-10-23, server 0.2.2, additive): **quotas and request
   limits** (security audit S2) and **vault key trust** (security audit
   2026-10-21, finding H2).

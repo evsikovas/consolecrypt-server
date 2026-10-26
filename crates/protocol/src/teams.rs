@@ -39,6 +39,8 @@ pub mod labels {
     pub const TEAM_LOG_ENTRY: &[u8] = b"consolecrypt/teams/v1/log-entry\0";
     /// Prefix of the log hash input (entry + signature).
     pub const TEAM_LOG_HASH: &[u8] = b"consolecrypt/teams/v1/log-hash\0";
+    /// Prefix of a signed team key commitment (protocol 1.12).
+    pub const TEAM_KEY_COMMITMENT: &[u8] = b"consolecrypt/teams/v1/key-commitment\0";
     /// Prefix of the member verification code input.
     pub const TEAM_MEMBER_CODE: &[u8] = b"consolecrypt/teams/v1/member-code\0";
     /// Prefix of the key-epoch chain AEAD associated data.
@@ -328,6 +330,9 @@ pub struct CreateTeamRequest {
     pub owner_envelope: NewEnvelope,
     /// The calling device's trust marker for the team vault.
     pub device_envelope: NewEnvelope,
+    /// Protocol 1.12: the owner's signed commitment of the epoch-0 VRK.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_commitment: Option<TeamKeyCommitment>,
 }
 
 /// A team as the caller sees it.
@@ -393,6 +398,69 @@ pub struct TeamKeyMaterial {
     pub key_epoch: u32,
     pub envelope: KeyEnvelope,
     pub chain: Vec<TeamKeyChainLink>,
+    /// Protocol 1.12: the signed commitment of the `key_epoch` VRK, if an
+    /// admin published one. Clients check it against the key they opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_commitment: Option<TeamKeyCommitment>,
+}
+
+/// Protocol 1.12: an owner or admin vouches for the VRK of `key_epoch` by
+/// signing its key commitment (`HKDF(VRK)`, the same value as the vault key
+/// commitment of protocol 1.11) with their per-team signing key from the
+/// membership log. A member opening the team checks the signature with the
+/// signer's key from the log it verified, so a server cannot hand out a
+/// VRK of its own — not even to a member opening the team for the first
+/// time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamKeyCommitment {
+    pub key_epoch: u32,
+    /// 32 bytes.
+    pub commitment: Bytes,
+    /// An owner or admin of the team.
+    pub signer_user_id: UserId,
+    /// Ed25519 over [`team_key_commitment_message`].
+    pub signature: Bytes,
+}
+
+/// Canonical signed bytes of a team key commitment:
+///
+/// ```text
+/// TEAM_KEY_COMMITMENT || vault_id (16) || key_epoch (u32 BE)
+/// || commitment (32) || signer_user_id (16)
+/// ```
+pub fn team_key_commitment_message(
+    vault_id: VaultId,
+    key_epoch: u32,
+    commitment: &[u8],
+    signer_user_id: UserId,
+) -> Vec<u8> {
+    let mut m = Vec::with_capacity(labels::TEAM_KEY_COMMITMENT.len() + 72);
+    m.extend_from_slice(labels::TEAM_KEY_COMMITMENT);
+    m.extend_from_slice(vault_id.as_bytes());
+    m.extend_from_slice(&key_epoch.to_be_bytes());
+    m.extend_from_slice(commitment);
+    m.extend_from_slice(signer_user_id.as_bytes());
+    m
+}
+
+impl TeamKeyCommitment {
+    /// Structural checks (sizes only; the signature is the reader's job).
+    pub fn validate(&self) -> Result<(), TeamValidationError> {
+        if self.commitment.len() != 32 || self.signature.len() != 64 {
+            return Err(TeamValidationError("malformed team key commitment"));
+        }
+        Ok(())
+    }
+}
+
+/// `PUT /v1/teams/{vault_id}/key-commitment` → `204` (protocol 1.12): an
+/// owner or admin publishes (or replaces) the commitment of the current
+/// key epoch, e.g. for a team created before 1.12.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PutTeamKeyCommitmentRequest {
+    /// VAK of the current epoch.
+    pub vault_access_key: Bytes,
+    pub key_commitment: TeamKeyCommitment,
 }
 
 /// `POST /v1/teams/{vault_id}/invitations` → `202`.
@@ -470,6 +538,10 @@ pub struct SubmitTeamLogRequest {
     pub new_vault_access_key: Option<Bytes>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_link: Option<TeamKeyChainLink>,
+    /// `rotate_key` (protocol 1.12): the actor's signed commitment of the
+    /// new epoch's VRK.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_commitment: Option<TeamKeyCommitment>,
 }
 
 /// Result of `POST /v1/teams/{vault_id}/log`. `team` is absent when the
@@ -484,6 +556,32 @@ pub struct SubmitTeamLogResponse {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn team_key_commitment_message_layout_1_12() {
+        let vault = VaultId::new();
+        let signer = UserId::new();
+        let m = team_key_commitment_message(vault, 7, &[9u8; 32], signer);
+        let label = labels::TEAM_KEY_COMMITMENT;
+        assert!(m.starts_with(label));
+        assert_eq!(m.len(), label.len() + 16 + 4 + 32 + 16);
+        assert_eq!(&m[label.len()..label.len() + 16], vault.as_bytes());
+        assert_eq!(&m[label.len() + 16..label.len() + 20], &7u32.to_be_bytes());
+        let kc = TeamKeyCommitment {
+            key_epoch: 7,
+            commitment: Bytes::new(vec![1; 32]),
+            signer_user_id: signer,
+            signature: Bytes::new(vec![2; 64]),
+        };
+        assert!(kc.validate().is_ok());
+        assert!(TeamKeyCommitment {
+            commitment: Bytes::new(vec![1; 31]),
+            ..kc.clone()
+        }
+        .validate()
+        .is_err());
+    }
+
     use super::*;
 
     fn keys(b: u8) -> TeamMemberKeys {

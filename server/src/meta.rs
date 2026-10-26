@@ -35,6 +35,7 @@ pub fn server_info(state: &AppState, upgrade_required: bool) -> ServerInfo {
             auth: auth_capability(&state.config.auth),
             teams: state.config.teams_enabled,
             vrk_commitment: true,
+            team_key_commitment: true,
         },
     }
 }
