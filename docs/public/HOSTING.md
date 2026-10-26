@@ -1541,6 +1541,67 @@ cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits show -
 1 MiB. Место на диске PostgreSQL планируйте с учётом квоты на хранилище и числа
 аккаунтов.
 
+### Пример: письма без SMTP — где взять код
+
+Без SMTP письма никуда не отправляются. Коды подтверждения email, смены пароля
+и ссылки «Это не я» оператор получает одним из двух способов.
+
+**`CC_MAIL_TRANSPORT=file` — только для локального или тестового сервера.**
+Каждое письмо записывается файлом в `CC_MAIL_DIR` (по умолчанию `./.dev-mail`
+относительно рабочего каталога процесса; в разработческом
+`server/docker-compose.yml` — `server/.dev-mail` на хосте):
+
+```dotenv
+CC_MAIL_TRANSPORT=file
+CC_MAIL_DIR=/path/to/mail
+```
+
+Имя файла — `<время UTC>-<тип>-<id>.eml`, например
+`20261026T205345-password_reset-….eml`. Тип письма с кодом: `verify_email` —
+подтверждение адреса, `password_reset` — смена пароля, `new_device` — вход с
+нового устройства («Это не я»). Остальные типы (`password_changed`,
+`device_revoked` и др.) — уведомления без кода.
+
+Текст письма закодирован в base64, поэтому `cat` его не покажет. Последнее
+письмо смены пароля можно прочитать так (для подтверждения email замените
+`password_reset` на `verify_email`):
+
+```sh
+python3 - "$(ls -t "$CC_MAIL_DIR"/*-password_reset-*.eml | head -1)" <<'PY'
+import sys
+from email import message_from_binary_file, policy
+with open(sys.argv[1], 'rb') as f:
+    msg = message_from_binary_file(f, policy=policy.default)
+print(msg['subject'])
+print(msg.get_body(('plain',)).get_content())
+PY
+```
+
+На macOS файл можно открыть и в «Почте»: `open файл.eml`.
+
+Код вставляется на страницу аккаунта: встроенную `/account` сервера
+(`CC_WEB_ACCOUNT=true`, «Подтвердить email» или «Забыли пароль? → У меня уже
+есть код») или страницу вашего сайта. Код подтверждения email принимает и
+приложение. Кнопки-ссылки в письмах появляются, только если задан
+`CC_PUBLIC_URL`, иначе в письме только код. Файлы содержат действующие
+одноразовые коды и создаются с правами `0600`: не используйте `file` на
+публичном сервере и удаляйте каталог, когда он больше не нужен.
+
+**`CC_MAIL_TRANSPORT=disabled` (по умолчанию).** Писем нет совсем. Оператор
+сначала сам проверяет, что адрес принадлежит пользователю, затем подтверждает
+его или выдаёт код смены пароля:
+
+```sh
+consolecrypt-server admin verify-email --email user@example.org
+consolecrypt-server admin reset-token --email user@example.org
+```
+
+`reset-token` печатает одноразовый код; он действует `CC_PASSWORD_RESET_TTL_SECS`
+(по умолчанию 1 час) и вводится там же, где код из письма. В Docker Compose и
+Kubernetes команды выполняются внутри контейнера:
+`cc_compose exec -T server /usr/local/bin/consolecrypt-server admin …` или
+`cc_kubectl exec deployment/consolecrypt -- /usr/local/bin/consolecrypt-server admin …`.
+
 ## Проверка зависимостей сервера
 
 Для разработчиков и тех, кто собирает образ сам. `server/scripts/dependency_audit.py check`
@@ -1989,3 +2050,64 @@ cc_compose exec -T server /usr/local/bin/consolecrypt-server admin limits show -
 `CC_MAX_DEVICES_PER_ACCOUNT` cannot exceed 64 and `CC_MAX_VAULT_BYTES` cannot be
 below 1 MiB. Plan PostgreSQL disk space for the per-vault quota and the number of
 accounts.
+
+### Example: mail without SMTP — where to get the code
+
+Without SMTP no mail leaves the server. The operator gets email confirmation
+codes, password reset codes and "This wasn't me" links in one of two ways.
+
+**`CC_MAIL_TRANSPORT=file` — local or test servers only.** Each message is
+written as a file into `CC_MAIL_DIR` (default `./.dev-mail`, relative to the
+process working directory; with the development `server/docker-compose.yml` it
+is `server/.dev-mail` on the host):
+
+```dotenv
+CC_MAIL_TRANSPORT=file
+CC_MAIL_DIR=/path/to/mail
+```
+
+File names are `<UTC time>-<kind>-<id>.eml`, for example
+`20261026T205345-password_reset-….eml`. Kinds that carry a code:
+`verify_email` (confirm the address), `password_reset` (new password),
+`new_device` (sign-in from a new device, "This wasn't me"). The other kinds
+(`password_changed`, `device_revoked` and so on) are notices without a code.
+
+The message text is base64-encoded, so `cat` will not show it. To read the
+latest password reset message (for email confirmation use `verify_email`
+instead of `password_reset`):
+
+```sh
+python3 - "$(ls -t "$CC_MAIL_DIR"/*-password_reset-*.eml | head -1)" <<'PY'
+import sys
+from email import message_from_binary_file, policy
+with open(sys.argv[1], 'rb') as f:
+    msg = message_from_binary_file(f, policy=policy.default)
+print(msg['subject'])
+print(msg.get_body(('plain',)).get_content())
+PY
+```
+
+On macOS the file also opens in Mail: `open file.eml`.
+
+The code goes into an account page: the server's built-in `/account`
+(`CC_WEB_ACCOUNT=true`, "Confirm email" or "Forgot password? → I already have
+a code") or your website's page. The app also accepts the email confirmation
+code. Mail carries link buttons only when `CC_PUBLIC_URL` is set; otherwise it
+carries just the code. The files hold live single-use codes and are created
+with mode `0600`: do not use `file` on a public server, and delete the
+directory when you no longer need it.
+
+**`CC_MAIL_TRANSPORT=disabled` (default).** No mail at all. The operator first
+checks that the address belongs to the user, then confirms it or issues a
+password reset code:
+
+```sh
+consolecrypt-server admin verify-email --email user@example.org
+consolecrypt-server admin reset-token --email user@example.org
+```
+
+`reset-token` prints a single-use code, valid for `CC_PASSWORD_RESET_TTL_SECS`
+(1 hour by default), entered wherever a mailed code would be. With Docker
+Compose or Kubernetes run the commands inside the container:
+`cc_compose exec -T server /usr/local/bin/consolecrypt-server admin …` or
+`cc_kubectl exec deployment/consolecrypt -- /usr/local/bin/consolecrypt-server admin …`.
