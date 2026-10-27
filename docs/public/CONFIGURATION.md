@@ -3,7 +3,7 @@
 > То же самое на сайте: [справочник параметров](https://consolecrypt.dev/guide#server-reference).
 > Same on the website: [configuration reference](https://consolecrypt.dev/guide#server-reference).
 
-Полный список параметров сервера синхронизации **0.2.3** (протокол **1.11**):
+Полный список параметров сервера синхронизации **0.2.4** (протокол **1.13**):
 что делает каждый ключ, какие значения он принимает, значение по умолчанию,
 путь в Helm и является ли значение секретом. Справочник составлен по коду загрузки
 конфигурации (`server/src/config.rs`, `server/src/config/*.rs`,
@@ -394,8 +394,8 @@ chart подставляет сам.
 
 ## English
 
-The complete parameter reference of the sync server **0.2.3** (protocol
-**1.11**): what every key does, which values it accepts, its default, its Helm
+The complete parameter reference of the sync server **0.2.4** (protocol
+**1.13**): what every key does, which values it accepts, its default, its Helm
 path and whether the value is a secret. It is derived from the configuration loader
 (`server/src/config.rs`, `server/src/config/*.rs`, `server/src/telemetry.rs`)
 and the Helm chart templates. `server/scripts/test_configuration_docs.py` fails
