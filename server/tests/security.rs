@@ -66,6 +66,14 @@ async fn other_accounts_cannot_see_or_touch_a_vault() {
         .await;
     not_found(s, &b, "replace password envelope");
     let (s, b) = srv
+        .post(
+            paths::RECOVERY_VAULT_RECOVERY_REPLACE,
+            Some(&x.access),
+            &json!({"vault_id": vault.id, "vault_access_key": vault.vak_bytes(), "envelope": recovery_envelope()}),
+        )
+        .await;
+    not_found(s, &b, "replace recovery envelope even with leaked VAK");
+    let (s, b) = srv
         .delete(
             &paths::fill(paths::VAULT, &[("vault_id", &v)]),
             &x.access,

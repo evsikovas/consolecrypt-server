@@ -123,7 +123,7 @@ def osv_findings(report):
     for result in report.get('results', []):
         path = result.get('source', {}).get('path', '')
         try:
-            path = str(Path(path).resolve().relative_to(ROOT))
+            path = Path(path).resolve().relative_to(ROOT).as_posix()
         except ValueError:
             pass
         for entry in result.get('packages', []):
@@ -168,6 +168,11 @@ def check(root):
             errors.append(f'cargo metadata {manifest}: {metadata.stderr.strip()[-500:]}')
         else:
             findings += own_crate_findings(json.loads(metadata.stdout), manifest)
+    try:
+        import osv_cargo
+        findings += osv_cargo.check(root, CARGO_MANIFESTS)
+    except Exception as error:
+        errors.append(f'Cargo OSV/GHSA check failed ({type(error).__name__})')
     files = lockfiles(root)
     if files and not shutil.which('osv-scanner'):
         errors.append(f'osv-scanner is not on PATH; see {DOCS}')

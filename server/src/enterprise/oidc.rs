@@ -127,18 +127,23 @@ async fn get_json(http: &reqwest::Client, url: &str, what: &str) -> anyhow::Resu
     Ok(body)
 }
 
-async fn read_limited(resp: reqwest::Response) -> Result<Vec<u8>, ()> {
+async fn read_limited(mut resp: reqwest::Response) -> Result<Vec<u8>, ()> {
     if resp
         .content_length()
         .is_some_and(|l| l > MAX_RESPONSE_BYTES as u64)
     {
         return Err(());
     }
-    let bytes = resp.bytes().await.map_err(|_| ())?;
-    if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(());
+    let mut bytes = Vec::new();
+    // Content-Length may be absent (chunked/HTTP2). Enforce the budget while
+    // reading, before retaining another chunk, rather than after buffering EOF.
+    while let Some(chunk) = resp.chunk().await.map_err(|_| ())? {
+        if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+            return Err(());
+        }
+        bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 fn reqwest_kind(e: &reqwest::Error) -> &'static str {
@@ -504,6 +509,56 @@ async fn fetch_metadata(http: &reqwest::Client, cfg: &OidcConfig) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn response_limit_stops_chunked_body_before_eof() {
+        use futures_util::{stream, StreamExt};
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|| async {
+                // No Content-Length, and never an EOF: reject as soon as the
+                // body crosses the limit, rather than waiting to buffer it all.
+                let chunks = stream::iter([
+                    Ok::<_, std::convert::Infallible>(vec![0u8; MAX_RESPONSE_BYTES]),
+                    Ok(vec![0u8; 1]),
+                ])
+                .chain(stream::pending());
+                axum::body::Body::from_stream(chunks)
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.content_length().is_none());
+        let result = tokio::time::timeout(Duration::from_secs(2), read_limited(response)).await;
+        server.abort();
+        assert!(
+            matches!(result, Ok(Err(()))),
+            "must reject without waiting for EOF"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_limit_accepts_boundary_and_rejects_larger_bodies() {
+        for size in [0, MAX_RESPONSE_BYTES, MAX_RESPONSE_BYTES + 1] {
+            let response: reqwest::Response = axum::http::Response::new(vec![0u8; size]).into();
+            let result = read_limited(response).await;
+            if size <= MAX_RESPONSE_BYTES {
+                assert_eq!(result.unwrap().len(), size);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
 
     #[test]
     fn form_encoding() {

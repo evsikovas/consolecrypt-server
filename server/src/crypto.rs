@@ -194,8 +194,9 @@ impl PasswordHasher {
     /// Wait at most this long for a hashing slot, then shed load (503).
     const QUEUE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-    async fn permit(&self) -> Result<tokio::sync::SemaphorePermit<'_>, HasherBusy> {
-        match tokio::time::timeout(Self::QUEUE_TIMEOUT, self.permits.acquire()).await {
+    async fn permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, HasherBusy> {
+        match tokio::time::timeout(Self::QUEUE_TIMEOUT, self.permits.clone().acquire_owned()).await
+        {
             Ok(Ok(p)) => Ok(p),
             _ => {
                 metrics::counter!("cc_password_hasher_busy_total").increment(1);
@@ -206,10 +207,13 @@ impl PasswordHasher {
 
     /// Hash a password into a PHC string.
     pub async fn hash(&self, password: &SecretString) -> Result<String, HashError> {
-        let _permit = self.permit().await?;
+        let permit = self.permit().await?;
         let argon = self.argon();
         let pw = password.clone();
         tokio::task::spawn_blocking(move || {
+            // spawn_blocking continues after its awaiting request is cancelled.
+            // Keep capacity occupied until the actual Argon2 work finishes.
+            let _permit = permit;
             argon
                 .hash_password(pw.expose_secret().as_bytes())
                 .map(|h| h.to_string())
@@ -227,12 +231,13 @@ impl PasswordHasher {
         password: &SecretString,
         phc: Option<&str>,
     ) -> Result<bool, HasherBusy> {
-        let _permit = self.permit().await?;
+        let permit = self.permit().await?;
         let known = phc.is_some();
         let phc: String = phc.unwrap_or(&self.dummy_hash).to_owned();
         let pw = password.clone();
         let argon = self.argon();
         let ok = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             PasswordHash::new(&phc)
                 .map(|parsed| {
                     argon
@@ -333,5 +338,66 @@ mod tests {
             .unwrap());
         assert!(!h.verify(&pw, None).await.unwrap());
         assert!(!h.verify(&pw, Some("not a phc string")).await.unwrap());
+    }
+
+    // Keep the sole blocking worker occupied so cancellation happens while
+    // Argon2 is queued. No sleeps or expensive password parameters are needed.
+    fn cancelled_password_operation_keeps_capacity(verify: bool) {
+        use std::future::{poll_fn, Future};
+        use std::task::Poll;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let h = PasswordHasher::new(&PasswordHashingConfig {
+            memory_kib: 64,
+            iterations: 1,
+            parallelism: 1,
+            max_concurrent: 1,
+        })
+        .unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let blocker = runtime.spawn_blocking(move || wait.recv().unwrap());
+        runtime.block_on(async {
+            let pw = SecretString::new("test password");
+            let mut operation = Box::pin(async {
+                if verify {
+                    h.verify(&pw, None).await.unwrap();
+                } else {
+                    h.hash(&pw).await.unwrap();
+                }
+            });
+            poll_fn(|cx| {
+                assert!(operation.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            drop(operation);
+            let available_after_cancel = h.permits.available_permits();
+            // Release before asserting so a regression cannot hang runtime drop.
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            let _finished =
+                tokio::time::timeout(std::time::Duration::from_secs(5), h.permits.acquire())
+                    .await
+                    .expect("Argon2 must eventually release its slot")
+                    .unwrap();
+            assert_eq!(
+                available_after_cancel, 0,
+                "cancelled Argon2 freed its slot early"
+            );
+        });
+    }
+
+    #[test]
+    fn cancelled_hash_keeps_capacity() {
+        cancelled_password_operation_keeps_capacity(false);
+    }
+
+    #[test]
+    fn cancelled_verify_keeps_capacity() {
+        cancelled_password_operation_keeps_capacity(true);
     }
 }

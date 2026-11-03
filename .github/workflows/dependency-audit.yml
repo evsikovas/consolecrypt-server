@@ -13,6 +13,8 @@ on:
       - '**/Cargo.lock'
       - '**/deny.toml'
       - server/scripts/dependency_audit.py
+      - server/scripts/osv_cargo.py
+      - security-exceptions.toml
       - .github/workflows/dependency-audit.yml
 
 permissions: {}

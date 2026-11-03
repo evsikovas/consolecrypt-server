@@ -54,6 +54,8 @@ jobs:
           python3 -m unittest discover -s server/scripts -p 'test_publish*.py' -v
           python3 -m unittest discover -s server/scripts -p 'test_release*.py' -v
           python3 -m unittest discover -s server/scripts -p 'test_configuration_docs.py' -v
+          python3 -m unittest discover -s server/scripts -p 'test_dependency_audit.py' -v
+          python3 -m unittest discover -s server/scripts -p 'test_osv_cargo.py' -v
           python3 server/scripts/example_versions.py --check
       - name: Server, sync, sharing and backup/restore integration
         env:
