@@ -69,7 +69,7 @@ Caddy. Постоянные данные лежат в Docker volumes. Наст�
 `server.env` версию сервера примера, например:
 
 ```text
-CC_SERVER_VERSION=0.2.4
+CC_SERVER_VERSION=0.2.5
 ```
 
 Compose берёт образ `ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION`.
@@ -308,7 +308,7 @@ cc_compose() {
 использует случайные loopback-порты и удаляет только свои контейнеры и volumes:
 
 ```sh
-export CC_SERVER_VERSION=0.2.4   # версия примера (server/deploy/docker/.env.example)
+export CC_SERVER_VERSION=0.2.5   # версия примера (server/deploy/docker/.env.example)
 docker pull "ghcr.io/evsikovas/consolecrypt-server:$CC_SERVER_VERSION"
 docker pull postgres:16-alpine
 docker pull caddy:2-alpine
@@ -340,7 +340,7 @@ SMTP-почты — эти проверки нужно выполнить для
 git clone --branch main --single-branch https://github.com/evsikovas/consolecrypt-server.git
 cd consolecrypt-server
 helm show chart server/helm/consolecrypt-server
-export CC_SERVER_VERSION=0.2.4   # = appVersion из вывода выше
+export CC_SERVER_VERSION=0.2.5   # = appVersion из вывода выше
 ```
 
 Для воспроизводимой установки закрепите `image.digest` из `server-image.json`
@@ -1017,6 +1017,12 @@ AD по LDAPS, команды аварийного доступа и защит�
 `login_email_total` владелец получает одно письмо в сутки «Много неудачных попыток
 входа». Письмо сброса пароля из сети, где владелец входил за последние 90 дней,
 отправляется и сверх `recovery_email_total`. Постоянной блокировки аккаунта нет.
+
+Начиная с 0.2.5 отмена HTTP-запроса не освобождает слот Argon2, пока уже
+запущенное вычисление действительно не закончится. Это сохраняет ограничение
+параллельной нагрузки при разрывах соединения. Ответы discovery/token/JWKS
+OIDC ограничены 512 KiB во время чтения потока, включая ответы без Content-Length;
+при превышении вход отклоняется. Учитывайте этот предел при настройке IdP.
 
 Переопределения для отдельного аккаунта (действуют без перезапуска, не позже
 чем через 30 секунд):
