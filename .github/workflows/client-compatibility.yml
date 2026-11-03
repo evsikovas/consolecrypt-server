@@ -1,0 +1,64 @@
+name: Client compatibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-client-compatibility
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Server compatibility, PostgreSQL and restore checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Dependency audit
+        run: |
+          python3 server/scripts/dependency_audit.py install "$RUNNER_TEMP/audit-tools" cargo-deny
+          PATH="$RUNNER_TEMP/audit-tools:$PATH" python3 server/scripts/dependency_audit.py check
+      - name: Repository toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: |
+            crates
+            server
+      - name: Formatting, lint and protocol tests
+        run: |
+          cargo fmt --manifest-path crates/Cargo.toml --all -- --check
+          cargo fmt --manifest-path server/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path server/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path crates/Cargo.toml
+      - name: Publication and configuration checks
+        run: |
+          python3 -m unittest discover -s server/scripts -p 'test_publish*.py' -v
+          python3 -m unittest discover -s server/scripts -p 'test_release*.py' -v
+          python3 -m unittest discover -s server/scripts -p 'test_configuration_docs.py' -v
+          python3 server/scripts/example_versions.py --check
+      - name: Server, sync, sharing and backup/restore integration
+        env:
+          CC_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
+          CC_TEST_REQUIRE_DB: '1'
+          CC_TEST_PG_TOOLS: docker exec -i ${{ job.services.postgres.id }}
+          CC_TEST_PG_USER: postgres
+        run: cargo test --locked --manifest-path server/Cargo.toml --all-targets -- --test-threads=4
