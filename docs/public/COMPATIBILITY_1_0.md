@@ -53,3 +53,11 @@ PostgreSQL without deployment.
 Update every device to client 1.0 before saving WebDAV settings. Older clients
 may drop the unknown field when rewriting shared settings; the server cannot
 merge decrypted settings without breaking the E2EE boundary.
+
+## Проверка / Verification
+
+[Client compatibility, 3 November 2026](https://github.com/evsikovas/consolecrypt-server/actions/runs/41619884664)
+passed on server commit `58709b5`: dependency policy, formatting, lint,
+protocol/configuration checks and server integration tests with PostgreSQL,
+including sync, permissions, sharing and backup/restore. No production
+deployment or data migration was performed by that workflow.
