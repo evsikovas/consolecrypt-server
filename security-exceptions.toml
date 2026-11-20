@@ -1,0 +1,7 @@
+[[exception]]
+id = "RUSTSEC-2026-0543"
+package = "chrono"
+version = "0.4.45"
+expires = "2026-12-18"
+owner = "ConsoleCrypt maintainers"
+reason = "Maintenance notice. Preserve serialized UTC timestamps while migrating date handling."
