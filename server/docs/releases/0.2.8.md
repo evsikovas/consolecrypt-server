@@ -1,0 +1,25 @@
+# ConsoleCrypt Sync Server 0.2.8
+
+## Русский
+
+- Обновлены SMTP, SQLx и зависимости QUIC по замечаниям аудита RustSec.
+- Сервер поддерживает проверку совместимости версий устройств при синхронизации настроек личного хранилища. Владелец подключает эту возможность явно, если администратор указал опубликованную минимальную версию клиента.
+- Миграция 0016 добавляет таблицы метаданных. Содержимое хранилища остаётся зашифрованным. При восстановлении администратор может пометить выбранные аккаунты для повторной проверки устройств.
+
+## English
+
+- Updated the SMTP, SQLx and QUIC dependencies after the RustSec audit.
+- The server can check device versions when syncing personal vault settings. The owner opts in when the administrator has configured a published minimum client version.
+- Migration 0016 adds metadata tables. Vault contents remain encrypted. On restore, operators can mark selected accounts for renewed device verification.
+
+## Español
+
+- Se actualizaron las dependencias de SMTP, SQLx y QUIC tras la auditoría de RustSec.
+- El servidor puede comprobar la versión de los dispositivos al sincronizar los ajustes de una bóveda personal. El propietario activa esta función cuando el administrador ha configurado una versión mínima del cliente ya publicada.
+- La migración 0016 añade tablas de metadatos. El contenido de la bóveda sigue cifrado. Tras una restauración, el administrador puede marcar cuentas concretas para volver a verificar sus dispositivos.
+
+## 简体中文
+
+- 根据 RustSec 审计结果更新了 SMTP、SQLx 和 QUIC 依赖。
+- 同步个人保险库设置时，服务器可以检查设备的客户端版本。管理员设置已发布的最低客户端版本后，所有者可主动启用此功能。
+- 迁移 0016 添加元数据表，保险库内容继续保持加密。恢复数据后，管理员可将指定账户标记为需要重新验证设备。

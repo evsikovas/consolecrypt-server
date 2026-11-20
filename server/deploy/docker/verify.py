@@ -214,12 +214,13 @@ def main():
                        "WHERE datname='consolecrypt';") == "consolecrypt"
             migrations = sql("SELECT string_agg(version::text, ',' ORDER BY version) "
                              "FROM _sqlx_migrations WHERE success;")
-            assert migrations == "1,2,3,4,6,7,8,9,10,11,12,13,14,15"
+            assert migrations == "1,2,3,4,6,7,8,9,10,11,12,13,14,15,16", migrations
+            assert sql("SELECT to_regclass('account_monitoring_compatibility') IS NOT NULL;") == "t"
             instance = sql("SELECT instance_id FROM sharing_instance;")
             marker = uuid.uuid4().hex
             sql("CREATE TABLE compose_verification_marker(value text PRIMARY KEY); "
                 f"INSERT INTO compose_verification_marker VALUES ('{marker}');")
-            checks.append("nonroot read-only server; database-owner role is not a superuser; migrations 1,2,3,4,6,7,8,9,10,11,12,13,14,15")
+            checks.append(f"nonroot read-only server; database-owner role is not a superuser; migrations {migrations}")
             limits = cc("exec", "-T", "server", "/usr/local/bin/consolecrypt-server",
                         "admin", "limits", "show").decode()
             assert "push_device" in limits and "observe" in limits
