@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "consolecrypt-server"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "argon2",
@@ -484,6 +484,7 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-native-certs",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",

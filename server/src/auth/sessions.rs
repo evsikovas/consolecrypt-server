@@ -156,6 +156,24 @@ async fn refresh_once(
         .ok_or_else(|| refresh_failure("malformed_refresh_token"))?;
 
     let mut tx = state.db.begin().await?;
+    // Account barrier precedes session/token row locks, matching registration
+    // and opt-in order. Re-read/revalidate token/session below after the lock.
+    let account:Option<(Uuid,Uuid)>=sqlx::query_as("SELECT s.user_id,s.device_id FROM refresh_tokens r JOIN sessions s ON s.id=r.session_id WHERE r.token_hash=$1")
+        .bind(&hash[..]).fetch_optional(&mut *tx).await?;
+    let (account, device) = account.ok_or_else(|| refresh_failure("unknown_refresh_token"))?;
+    crate::compatibility::lock_account(&mut tx, account.into()).await?;
+    // Revoke locks device before sessions. The nonce insert also holds a device
+    // FK lock; take this SHARE before token/session locks to preserve that order.
+    let live: Option<bool> = sqlx::query_scalar(
+        "SELECT revoked_at IS NULL FROM devices WHERE id=$1 AND user_id=$2 FOR SHARE",
+    )
+    .bind(device)
+    .bind(account)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if live != Some(true) {
+        return Err(AppError::device_revoked());
+    }
     // Row locks serialise concurrent refreshes of the same token: the loser
     // sees `used_at` and is treated as a replay.
     let row: Option<RefreshRow> = sqlx::query_as(
@@ -260,6 +278,19 @@ async fn refresh_once(
         return Ok(RefreshStep::Recheck(user_id));
     }
 
+    if row.user_id != account || row.device_id != device {
+        return Err(refresh_failure("session_invalid"));
+    }
+    crate::compatibility::check_admission(
+        &mut *tx,
+        user_id,
+        if proof.proof.is_some() {
+            crate::compatibility::ClientVersion::from_headers(&proof.parts.headers)
+        } else {
+            None
+        },
+    )
+    .await?;
     sqlx::query("UPDATE refresh_tokens SET used_at = now() WHERE token_hash = $1")
         .bind(&hash[..])
         .execute(&mut *tx)

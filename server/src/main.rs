@@ -104,6 +104,16 @@ enum AdminCommand {
         #[command(subcommand)]
         command: LimitsCommand,
     },
+    /// Explicit restore quarantine for ONLY listed owner accounts. The stable
+    /// floor must come from a trusted external witness/manual release review;
+    /// a rolled-back DB cannot prove its own previous highest policy.
+    RestoreCompatibility {
+        #[arg(long,required=true,num_args=1..=64)]
+        accounts: Vec<cc_protocol::UserId>,
+        #[arg(long)]
+        declared_floor: String,
+    },
+
     /// After restoring the database from a backup: rotate vault epochs so
     /// clients detect the rollback and re-upload what the backup lacks.
     #[command(group(clap::ArgGroup::new("target").required(true).args(["vault", "all"])))]
@@ -245,6 +255,21 @@ async fn run_admin(pool: &sqlx::PgPool, config: &Config, cmd: AdminCommand) -> a
         AdminCommand::EnableUser { email } => {
             admin::set_enabled(pool, &email, true).await?;
             println!("account enabled");
+        }
+        AdminCommand::RestoreCompatibility {
+            accounts,
+            declared_floor,
+        } => {
+            let report = consolecrypt_server::compatibility::restore::quarantine_restored_accounts(
+                pool,
+                &accounts,
+                &declared_floor,
+            )
+            .await?;
+            println!(
+                "quarantined {} restored account(s); rotated {} personal vault epoch(s)",
+                report.accounts, report.vaults
+            );
         }
         AdminCommand::RotateEpoch { vault, .. } => {
             let n = admin::rotate_epoch(pool, vault).await?;

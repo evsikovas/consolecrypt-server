@@ -159,6 +159,8 @@ reverse proxy или Ingress перед ним. Proxy должен переда�
 
 ## Синхронизация, WebSocket и квоты
 
+`CC_MONITORING_PRESERVATION_MINIMUM` задаёт минимальную стабильную версию клиента, например `1.2.0`, которую сервер предлагает владельцам личных хранилищ для добровольного включения совместимости настроек. По умолчанию предложение выключено. Указывайте опубликованный релиз без суффикса сборки и оставляйте подписи запросов включёнными. После подтверждения владельцем сервер блокирует доступ к защищённым операциям с несовместимых устройств его аккаунта.
+
 | Переменная | Helm | По умолчанию | Значения | Секрет | Что делает |
 |---|---|---|---|---|---|
 | `CC_SYNC_PAGE_BYTES` | `config.sync.pageBytes` | `8388608` (8 MiB) | байты, ≥ 65536 | нет | Бюджет байт одной страницы `changes`/`snapshot` и списков общего доступа, не меньше 65536. |
@@ -546,6 +548,8 @@ mails, failed sign-in warnings and team invitations.
 | `CC_NEW_DEVICE_MAIL_PER_HOUR` | `config.deviceProtection.newDeviceMailsPerHour` | `10` | integer ≥ 0 | no | "New device" mails per account per hour; later sign-ins of that hour are folded into one mail. |
 
 ## Sync, WebSocket and quotas
+
+`CC_MONITORING_PRESERVATION_MINIMUM` sets the minimum stable client version, such as `1.2.0`, offered to personal vault owners for optional settings compatibility. The offer is disabled by default. Use a published release without a build suffix and keep request proofs enabled. Once the owner opts in, the server blocks protected operations by incompatible devices on that account.
 
 | Variable | Helm | Default | Values | Secret | What it does |
 |---|---|---|---|---|---|

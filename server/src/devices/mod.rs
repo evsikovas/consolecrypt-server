@@ -65,6 +65,14 @@ pub async fn register_or_match(
     proof: Option<&DeviceProof>,
     quota: &Quotas,
 ) -> AppResult<DeviceOutcome> {
+    crate::compatibility::lock_account(conn, user_id).await?;
+    let reported = if proof.is_some() {
+        reg.client_version
+            .as_deref()
+            .and_then(crate::compatibility::ClientVersion::parse)
+    } else {
+        None
+    };
     let name = validate_device_name(&reg.name)?;
     let client_version = short_text(reg.client_version.as_deref(), 64);
     let existing: Option<ExistingDevice> = sqlx::query_as(
@@ -90,6 +98,7 @@ pub async fn register_or_match(
                 )
                 .await?;
             }
+            crate::compatibility::check_admission(&mut *conn, user_id, reported).await?;
             let res = sqlx::query(
                 "INSERT INTO devices
                      (id, user_id, name, platform, encryption_public_key, signing_public_key,
@@ -127,6 +136,7 @@ pub async fn register_or_match(
             // of its signing key (ids and public keys are not secret).
             let proof = proof.ok_or_else(|| proof_error("device_proof_required"))?;
             verify_device_proof(conn, reg.device_id, &d.signing_public_key, proof).await?;
+            crate::compatibility::check_admission(&mut *conn, user_id, reported).await?;
             sqlx::query(
                 "UPDATE devices SET name = $2, platform = $3,
                         client_version = COALESCE($4, client_version), last_seen_at = now()

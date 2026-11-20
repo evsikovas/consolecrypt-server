@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Configuration keys accepted by the native JSON file (environment-only telemetry is excluded).
 pub(super) const KEYS: &[&str] = &[
+    "CC_MONITORING_PRESERVATION_MINIMUM",
     "CC_ACCESS_TOKEN_TTL_SECS",
     "CC_ARGON2_ITERATIONS",
     "CC_ARGON2_MAX_CONCURRENT",

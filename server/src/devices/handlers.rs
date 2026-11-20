@@ -109,6 +109,7 @@ pub async fn create_trust_request(
         + chrono::Duration::from_std(state.config.device_request_ttl)
             .unwrap_or(chrono::Duration::hours(24));
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
     // A new request supersedes older pending ones of the same device.
     sqlx::query(
         "UPDATE device_requests SET status = 'expired', decided_at = now()
@@ -177,6 +178,7 @@ pub async fn rename_device(
 ) -> AppResult<Json<DeviceInfo>> {
     let name = validate_device_name(&req.name)?;
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
     let updated = sqlx::query(
         "UPDATE devices SET name = $3 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
     )
@@ -311,6 +313,7 @@ pub async fn approval_intent(
         .account(&state, Limit::VerificationAccount, auth.user_id)
         .await?;
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
     lock_pending_request(&mut tx, &auth, req.request_id, device_id).await?;
     if !trusted_for_any_requested(&mut tx, &auth, req.request_id).await? {
         return Err(AppError::device_not_trusted());
@@ -454,6 +457,9 @@ pub async fn approve_device(
         .transpose()?;
 
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
+    crate::compatibility::check(&mut *tx, auth.user_id, auth.client_version).await?;
+    crate::compatibility::check_device(&mut tx, auth.user_id, device_id).await?;
     lock_pending_request(&mut tx, &auth, req.request_id, device_id).await?;
     let requested: Vec<Uuid> =
         sqlx::query_scalar("SELECT vault_id FROM device_request_vaults WHERE request_id = $1")
@@ -651,6 +657,7 @@ pub async fn reject_device(
     ApiJson(req): ApiJson<RejectDeviceRequest>,
 ) -> AppResult<StatusCode> {
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
     lock_pending_request(&mut tx, &auth, req.request_id, device_id).await?;
     if !trusted_for_any_requested(&mut tx, &auth, req.request_id).await? {
         return Err(AppError::device_not_trusted());
@@ -702,6 +709,9 @@ pub async fn attest_device(
     .await?;
 
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
+    crate::compatibility::check_admission(&mut *tx, auth.user_id, auth.client_version).await?;
+    crate::compatibility::bootstrap_vault(&mut *tx, auth.user_id, req.vault_id).await?;
     // Serialise with a concurrent revoke of this device (revoke locks the row
     // FOR UPDATE and revokes its envelopes): never store an envelope for a
     // device that is being revoked.
@@ -758,6 +768,7 @@ pub async fn revoke_device(
 ) -> AppResult<StatusCode> {
     let reason = short_text(req.reason.as_deref(), 256);
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
     let found: Option<(String, bool)> = sqlx::query_as(
         "SELECT name, revoked_at IS NOT NULL FROM devices
           WHERE id = $1 AND user_id = $2 FOR UPDATE",
@@ -834,6 +845,10 @@ pub async fn deny_device(
     let hash = crypto::presented_token_hash(TokenKind::DenyDevice, req.token.expose_secret())
         .ok_or_else(invalid)?;
     let mut tx = state.db.begin().await?;
+    let account:Option<Uuid>=sqlx::query_scalar("SELECT user_id FROM device_deny_tokens WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now()")
+      .bind(&hash[..]).fetch_optional(&mut *tx).await?;
+    let account = account.ok_or_else(invalid)?;
+    crate::compatibility::lock_account(&mut tx, account.into()).await?;
     let token: Option<DenyTokenRow> = sqlx::query_as(
         "SELECT user_id, device_id, created_at FROM device_deny_tokens
           WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
@@ -846,6 +861,9 @@ pub async fn deny_device(
         metrics::counter!("cc_device_denials_total", "result" => "invalid").increment(1);
         return Err(invalid());
     };
+    if token.user_id != account {
+        return Err(invalid());
+    }
     let user_id = cc_protocol::UserId::from(token.user_id);
     // Lock the candidates, then re-check trust under the lock (see revoke).
     let candidates: Vec<(Uuid, String, bool)> = match token.device_id {

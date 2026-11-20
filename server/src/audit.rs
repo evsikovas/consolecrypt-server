@@ -53,6 +53,8 @@ pub enum AuditType {
     VaultProofFailed,
     SyncPush,
     AdminAction,
+    MonitoringCompatibilityEnabled,
+    MonitoringCompatibilityQuarantined,
     /// An account was linked to an IdP/directory identity (protocol 1.9).
     IdentityLinked,
     IdentityUnlinked,
@@ -87,6 +89,8 @@ pub enum AuditType {
 impl AuditType {
     pub const fn as_str(self) -> &'static str {
         match self {
+            AuditType::MonitoringCompatibilityEnabled => "monitoring_compatibility_enabled",
+            AuditType::MonitoringCompatibilityQuarantined => "monitoring_compatibility_quarantined",
             AuditType::Register => "register",
             AuditType::Login => "login",
             AuditType::LoginFailed => "login_failed",

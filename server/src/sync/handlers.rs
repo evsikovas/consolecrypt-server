@@ -149,9 +149,13 @@ pub async fn push(
 
     let db_timer = crate::db::DbTimer::start("sync_push");
     let mut tx = state.db.begin().await?;
+    // Account scope covers ALL its personal vaults: acquire the account row
+    // BEFORE the existing sequence lock in both push and opt-in. Middleware may
+    // have accepted an older request before opt-in; recheck inside this tx.
+    crate::compatibility::lock_account(&mut tx, access.owner_user_id).await?;
     // Serialise pushes per vault; everything below sees a stable vault.
     let locked: Option<(i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT s.last_sequence, s.stored_bytes, s.object_count, s.tombstone_count
+        "/* cc.sync.sequence */ SELECT s.last_sequence, s.stored_bytes, s.object_count, s.tombstone_count
            FROM vault_sequences s
            JOIN vaults v ON v.id = s.vault_id AND v.state = 'active'
           WHERE s.vault_id = $1
@@ -162,6 +166,7 @@ pub async fn push(
     .await?;
     let (last_sequence, stored_bytes, object_count, tombstone_count) =
         locked.ok_or_else(|| AppError::gone("vault was deleted"))?;
+    crate::compatibility::check_vault(&mut *tx, vault_id, auth.client_version).await?;
     // Re-check trust under the lock (a concurrent revocation wins).
     let still_trusted: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM vault_key_envelopes
@@ -558,12 +563,14 @@ async fn fetch_page(
     after: i64,
     limit: i64,
     live_only: bool,
+    client_version: Option<crate::compatibility::ClientVersion>,
 ) -> AppResult<Page> {
     let _db_timer = crate::db::DbTimer::start("sync_page");
     let mut tx = state.db.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
+    crate::compatibility::check_vault(&mut *tx, vault_id, client_version).await?;
     let (latest_sequence, epoch): (i64, Uuid) = sqlx::query_as(
         "SELECT s.last_sequence, v.epoch FROM vault_sequences s
            JOIN vaults v ON v.id = s.vault_id
@@ -651,7 +658,15 @@ pub async fn changes(
         .require_trusted()?;
     // Tombstones are never compacted (ADR-0202), so there is no horizon and
     // `410 gone` is not produced here in v1.
-    let page = fetch_page(&state, q.vault_id, q.after, page_limit(q.limit), false).await?;
+    let page = fetch_page(
+        &state,
+        q.vault_id,
+        q.after,
+        page_limit(q.limit),
+        false,
+        auth.client_version,
+    )
+    .await?;
     metrics::counter!("cc_sync_pull_requests_total", "kind" => "changes").increment(1);
     Ok(Json(ChangesResponse {
         next_after: page.items.last().map_or(q.after, |c| c.sequence),
@@ -675,7 +690,15 @@ pub async fn snapshot(
     VaultAccess::load(&state.db, &auth, q.vault_id)
         .await?
         .require_trusted()?;
-    let page = fetch_page(&state, q.vault_id, cursor, page_limit(q.limit), true).await?;
+    let page = fetch_page(
+        &state,
+        q.vault_id,
+        cursor,
+        page_limit(q.limit),
+        true,
+        auth.client_version,
+    )
+    .await?;
     metrics::counter!("cc_sync_pull_requests_total", "kind" => "snapshot").increment(1);
     Ok(Json(SnapshotResponse {
         next_cursor: if page.has_more {

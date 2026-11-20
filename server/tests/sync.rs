@@ -539,12 +539,13 @@ async fn multi_megabyte_push_is_accepted() {
         .collect();
     let (status, body) = srv.push(&a, vault.id, batch).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    // Other endpoints keep the 1 MiB limit.
+    // Auth keeps its own smaller limit. Exceed it by one byte so a client
+    // doesn't still have megabytes left to send when the server replies 413.
     let resp = srv
         .http
         .post(srv.url(paths::AUTH_LOGIN))
         .header("content-type", "application/json")
-        .body(vec![b' '; 2 * 1024 * 1024])
+        .body(vec![b' '; consolecrypt_server::AUTH_BODY_LIMIT + 1])
         .send()
         .await
         .unwrap();

@@ -412,6 +412,7 @@ pub async fn logout(
     ApiJsonOrDefault(req): ApiJsonOrDefault<LogoutRequest>,
 ) -> AppResult<Response> {
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
     let quarantine = if req.all_sessions {
         protection::quarantine_of(&mut *tx, &state.config.device_protection, auth.device_id).await?
     } else {

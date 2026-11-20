@@ -60,6 +60,9 @@ pub struct Config {
     /// When explicitly false (migration opt-out), invalid proofs are still
     /// rejected but missing ones are only counted.
     pub require_request_proof: bool,
+    /// Explicit operator offer for personal-account monitoring preservation.
+    /// None by default; must name a real published stable release, never guessed.
+    pub monitoring_preservation_minimum: Option<String>,
     /// Experimental ADR-0008 backend; disabled until joint acceptance.
     pub object_sharing_enabled: bool,
     /// ADR-0009 kind capabilities; each requires general sharing and proofs.
@@ -287,6 +290,8 @@ impl Config {
         let auth = AuthConfig::from_lookup(&get, public_url.as_deref())?;
         let config = Self {
             auth,
+            monitoring_preservation_minimum: get("CC_MONITORING_PRESERVATION_MINIMUM")
+                .filter(|v| !v.is_empty()),
             listen_addr: parse_or(
                 get("CC_LISTEN_ADDR"),
                 "CC_LISTEN_ADDR",
@@ -563,6 +568,13 @@ impl Config {
     /// zero interval panicking tokio timers).
     pub fn validate(&self) -> Result<(), ConfigError> {
         let err = |m: &str| Err(ConfigError(m.to_owned()));
+        if let Some(floor) = &self.monitoring_preservation_minimum {
+            if crate::compatibility::ClientVersion::release(floor).is_none()
+                || !self.require_request_proof
+            {
+                return err("CC_MONITORING_PRESERVATION_MINIMUM requires strict proofs and a stable release without build metadata");
+            }
+        }
         if self.object_sharing_enabled && !self.require_request_proof {
             return err("object sharing requires CC_REQUIRE_REQUEST_PROOF=true");
         }
@@ -734,6 +746,10 @@ impl fmt::Debug for Config {
             .field("refresh_token_ttl", &self.refresh_token_ttl)
             .field("trust_proxy_headers", &self.trust_proxy_headers)
             .field("require_request_proof", &self.require_request_proof)
+            .field(
+                "monitoring_preservation_minimum",
+                &self.monitoring_preservation_minimum,
+            )
             .field("object_sharing_enabled", &self.object_sharing_enabled)
             .field("shared_groups_enabled", &self.shared_groups_enabled)
             .field("shared_secrets_enabled", &self.shared_secrets_enabled)

@@ -15,6 +15,7 @@
 pub mod admin;
 pub mod audit;
 pub mod auth;
+pub mod compatibility;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -133,6 +134,13 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             paths::VAULT_KEY_COMMITMENTS,
             get(v::list_key_commitments).put(v::put_key_commitment),
+        )
+        // Explicit personal-account compatibility metadata. No decrypted data.
+        .route(
+            "/v1/vaults/{vault_id}/compatibility/monitoring-settings",
+            get(compatibility::handlers::read)
+                .put(compatibility::handlers::opt_in)
+                .layer(DefaultBodyLimit::max(4096)),
         )
         // sync
         .route(

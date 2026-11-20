@@ -33,6 +33,7 @@ pub async fn vault_material(
     ClientIp(ip): ClientIp,
     ApiQuery(q): ApiQuery<RecoveryMaterialQuery>,
 ) -> AppResult<Json<VaultRecoveryMaterial>> {
+    crate::compatibility::bootstrap_vault(&state.db, auth.user_id, q.vault_id).await?;
     let access = VaultAccess::load(&state.db, &auth, q.vault_id).await?;
     let password_envelope =
         envelopes::live_for(&state.db, q.vault_id, RecipientType::Password, None).await?;

@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 pub async fn authenticate(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let (mut parts, body) = req.into_parts();
-    let (ctx, signing_key) = match lookup(&state, &parts).await {
+    let (mut ctx, signing_key) = match lookup(&state, &parts).await {
         Ok(found) => found,
         Err(err) => return err.into_response(),
     };
@@ -83,6 +83,16 @@ pub async fn authenticate(State(state): State<AppState>, req: Request, next: Nex
             Body::from(bytes)
         }
     };
+    // Current version has no stored fallback. A migration replica accepting
+    // missing proofs cannot admit writes to an already protected scope: only
+    // a present, verified request populates this context. Version headers are
+    // still self-reports (not signed software attestation).
+    if parts.headers.contains_key(HEADER_DEVICE_PROOF) {
+        ctx.client_version = crate::compatibility::ClientVersion::from_headers(&parts.headers);
+    }
+    if let Err(error) = crate::compatibility::observe_request(&state, &ctx, &parts).await {
+        return error.into_response();
+    }
     parts.extensions.insert(ctx);
     next.run(Request::from_parts(parts, body)).await
 }

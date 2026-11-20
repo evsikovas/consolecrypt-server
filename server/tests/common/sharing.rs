@@ -10,6 +10,7 @@ pub fn context(s: &Session) -> AuthContext {
         device_id: s.device.id,
         session_id: s.session_id,
         email_verified: false,
+        client_version: None,
         access_token_hash: crypto::sha256(s.access.as_bytes()),
     }
 }

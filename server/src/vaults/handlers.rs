@@ -62,6 +62,7 @@ pub async fn create_vault(
         .bind(Uuid::from(auth.user_id))
         .execute(&mut *tx)
         .await?;
+    crate::compatibility::check(&mut *tx, auth.user_id, auth.client_version).await?;
     let owned: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM vaults
           WHERE owner_user_id = $1 AND state <> 'deleted' AND kind = 'personal'",
@@ -158,6 +159,7 @@ pub async fn list_vaults(
     State(state): State<AppState>,
     auth: AuthContext,
 ) -> AppResult<Json<ListVaultsResponse>> {
+    let bootstrap = crate::compatibility::is_quarantined(&state.db, auth.user_id).await?;
     let rows: Vec<VaultListRow> = sqlx::query_as(
         "SELECT v.id, v.owner_user_id, m.role, v.state, v.created_at, v.updated_at,
                 v.deletion_scheduled_at, v.epoch, s.last_sequence,
@@ -168,11 +170,12 @@ pub async fn list_vaults(
            JOIN vaults v ON v.id = m.vault_id
            JOIN vault_sequences s ON s.vault_id = v.id
           WHERE m.user_id = $1 AND m.revoked_at IS NULL AND v.state <> 'deleted'
-            AND v.kind = 'personal'
+            AND v.kind = 'personal' AND (NOT $3 OR v.owner_user_id=$1)
           ORDER BY v.created_at, v.id",
     )
     .bind(Uuid::from(auth.user_id))
     .bind(Uuid::from(auth.device_id))
+    .bind(bootstrap)
     .fetch_all(&state.db)
     .await?;
     let vaults = rows
@@ -272,6 +275,8 @@ pub async fn delete_vault(
         return Err(AppError::forbidden("only the owner can delete a vault"));
     }
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, access.owner_user_id).await?;
+    crate::compatibility::check_vault(&mut *tx, vault_id, auth.client_version).await?;
     if access.trusted {
         mark_deleted(&mut tx, Uuid::from(vault_id)).await?;
         AuditEvent::new(AuditType::VaultDeleted)
@@ -321,6 +326,8 @@ pub async fn cancel_vault_deletion(
         return Err(AppError::forbidden("only the owner can cancel a deletion"));
     }
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, access.owner_user_id).await?;
+    crate::compatibility::check_vault(&mut *tx, vault_id, auth.client_version).await?;
     let cancelled = sqlx::query(
         "UPDATE vaults SET state = 'active', deletion_scheduled_at = NULL, updated_at = now()
           WHERE id = $1 AND state = 'pending_deletion'",
@@ -429,6 +436,11 @@ pub async fn create_envelope(
     }
 
     let mut tx = state.db.begin().await?;
+    crate::compatibility::lock_account(&mut tx, auth.user_id).await?;
+    crate::compatibility::check(&mut *tx, auth.user_id, auth.client_version).await?;
+    if env.recipient_type == RecipientType::Device {
+        crate::compatibility::check_device(&mut tx, auth.user_id, auth.device_id).await?;
+    }
     if env.recipient_type == RecipientType::User {
         let member: Option<(Uuid,)> = sqlx::query_as(
             "SELECT user_id FROM vault_members
