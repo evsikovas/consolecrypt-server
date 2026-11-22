@@ -34,6 +34,7 @@ CONFIG = Path.home() / ".config" / "consolecrypt" / "telegram.env"
 # Shared with the client script; server keys are prefixed with "server:".
 STATE = Path.home() / ".config" / "consolecrypt" / "telegram-announced.json"
 LIMIT = 4096  # Telegram message text limit (after entity parsing).
+CAPTION_LIMIT = 1024
 
 TEXT = {
     "ru": {
@@ -125,24 +126,22 @@ def site_link(url: str) -> str:
 
 
 def notes_body(body: str, lang: str = "ru") -> str:
-    """The release notes without the title and the build footer (source,
-    verified build, image digest hints). Notes with an `## English` section
-    (since 0.2.2) give the Russian part to `ru` and that section to `en`;
-    `###` headings inside it become `##`."""
-    lines = []
-    english = None
+    """Select one language, including older notes with an unlabelled Russian opening."""
+    sections: dict[str, list[str]] = {"ru": []}
+    current = "ru"
+    languages = {"Русский": "ru", "English": "en", "Español": "es", "简体中文": "zh"}
     for line in body.splitlines():
-        if re.match(r"^#\s", line):
+        if re.match(r"^#\s|^!\[", line):
             continue
         if line.startswith(("[Source]", "Linux AMD64", "Image:")):
             break
-        if re.match(r"^##\s+English\s*$", line):
-            english = []
+        heading = re.fullmatch(r"##\s+(.+?)\s*", line)
+        if heading and heading.group(1) in languages:
+            current = languages[heading.group(1)]
+            sections.setdefault(current, [])
             continue
-        (lines if english is None else english).append(line)
-    if lang == "en" and english is not None:
-        lines = [re.sub(r"^###(\s)", r"##\1", line) for line in english]
-    return "\n".join(lines)
+        sections[current].append(re.sub(r"^###(\s)", r"##\1", line) if current == "en" else line)
+    return "\n".join(sections.get(lang, sections["ru"]))
 
 
 def inline(text: str) -> str:
@@ -218,7 +217,7 @@ def visible_length(markup: str) -> int:
 
 # --- Message ------------------------------------------------------------
 
-def message(data: dict, lang: str) -> str:
+def message(data: dict, lang: str, limit: int = LIMIT) -> str:
     t = TEXT[lang]
     version = data["tag_name"].removeprefix("v")
     title = f"<b>{html.escape(t['title'].format(version=version))}</b>"
@@ -235,7 +234,7 @@ def message(data: dict, lang: str) -> str:
     ])
     notes = blocks(notes_body(data.get("body") or "", lang))
     more = f'<a href="{release_url}">{t["notes"]} →</a>'
-    budget = LIMIT - visible_length(title) - visible_length(tail) - visible_length(more) - 8
+    budget = limit - visible_length(title) - visible_length(tail) - visible_length(more) - 8
     kept: list[str] = []
     used = 0
     for block in notes:
@@ -246,6 +245,15 @@ def message(data: dict, lang: str) -> str:
         kept.append(block)
         used += size
     return join([title, *kept, tail])
+
+
+def release_cover(tag: str) -> str | None:
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        return None
+    relative = f"server/docs/releases/covers/{tag[1:]}.png"
+    if (Path(__file__).resolve().parents[2] / relative).is_file():
+        return f"https://raw.githubusercontent.com/{REPO}/refs/tags/{tag}/{relative}"
+    return None
 
 
 # --- Telegram -----------------------------------------------------------
@@ -302,10 +310,12 @@ def main() -> None:
         sys.exit(0 if can_post else 1)
 
     data = release(args.tag)
-    text = message(data, args.lang)
+    cover = release_cover(data["tag_name"])
+    limit = CAPTION_LIMIT if cover else LIMIT
+    text = message(data, args.lang, limit)
     if args.dry_run:
         print(text)
-        print(f"\n[{visible_length(text)} / {LIMIT} characters]", file=sys.stderr)
+        print(f"\n[{visible_length(text)} / {limit} characters]", file=sys.stderr)
         return
     key = f"server:{data['tag_name']}:{args.lang}"
     state = announced()
@@ -314,11 +324,13 @@ def main() -> None:
     chat_id = config.get("TELEGRAM_CHAT_ID")
     if not chat_id:
         sys.exit("TELEGRAM_CHAT_ID is not set")
-    sent = telegram(
-        config,
-        "sendMessage",
-        {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "link_preview_options": {"is_disabled": True}},
-    )
+    payload = {"chat_id": chat_id, "parse_mode": "HTML"}
+    if cover:
+        sent = telegram(config, "sendPhoto", {**payload, "photo": cover, "caption": text})
+    else:
+        sent = telegram(config, "sendMessage", {
+            **payload, "text": text, "link_preview_options": {"is_disabled": True},
+        })
     state[key] = sent["message_id"]
     try:
         STATE.parent.mkdir(parents=True, exist_ok=True)

@@ -17,6 +17,83 @@ fn results(body: serde_json::Value) -> PushResponse {
     serde_json::from_value(body).expect("PushResponse")
 }
 
+/// Personal Vault/OpenBao connections in client 1.2.1 are independent opaque
+/// records. Opting out deletes the credential and its secret, but keeps the
+/// connection. Test both incremental sync and a fresh-device snapshot.
+#[tokio::test]
+async fn external_vault_connection_survives_optional_login_removal() {
+    use cc_protocol::sync::MutationOp;
+
+    let srv = server!();
+    let desktop = srv.new_account().await;
+    let vault = srv.create_vault(&desktop).await;
+    let phone = srv.new_device_session(&desktop, "Phone").await;
+    assert_eq!(srv.attest(&phone, &vault).await.0, StatusCode::OK);
+
+    let connection = ObjectId::new();
+    let credential = ObjectId::new();
+    let secret = ObjectId::new();
+    let login_records = [credential, secret];
+
+    let save = vec![put(connection, 0)];
+    assert_eq!(srv.push(&desktop, vault.id, save).await.0, StatusCode::OK);
+    let (status, page) = srv.changes(&phone, vault.id, 0).await;
+    assert_eq!(status, StatusCode::OK);
+    let first: ChangesResponse = serde_json::from_value(page).unwrap();
+    assert_eq!(first.changes.len(), 1);
+    assert_eq!(first.changes[0].object_id, connection);
+
+    let enable = vec![put(connection, 1), put(credential, 0), put(secret, 0)];
+    assert_eq!(
+        srv.push(&desktop, vault.id, enable.clone()).await.0,
+        StatusCode::OK
+    );
+    let (status, page) = srv.changes(&phone, vault.id, first.next_after).await;
+    assert_eq!(status, StatusCode::OK);
+    let enabled: ChangesResponse = serde_json::from_value(page).unwrap();
+    assert_eq!(enabled.changes.len(), enable.len());
+    for (received, mutation) in enabled.changes.iter().zip(&enable) {
+        let MutationOp::Put { body } = &mutation.op else {
+            unreachable!()
+        };
+        assert_eq!(received.object_id, mutation.object_id);
+        assert_eq!(received.body.as_ref(), Some(body));
+    }
+
+    let save_metadata_only = put(connection, 2);
+    let disable = vec![
+        save_metadata_only.clone(),
+        delete(credential, 1),
+        delete(secret, 1),
+    ];
+    assert_eq!(srv.push(&phone, vault.id, disable).await.0, StatusCode::OK);
+    let (status, page) = srv.changes(&desktop, vault.id, enabled.next_after).await;
+    assert_eq!(status, StatusCode::OK);
+    let disabled: ChangesResponse = serde_json::from_value(page).unwrap();
+    assert_eq!(disabled.changes.len(), 3);
+    for (change, id) in disabled.changes[1..].iter().zip(login_records) {
+        assert_eq!(change.object_id, id);
+        assert!(change.deleted && change.body.is_none());
+    }
+
+    let (status, snapshot) = srv
+        .get(
+            &format!("{}?vault_id={}", paths::SYNC_SNAPSHOT, vault.id),
+            &desktop.access,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let snapshot: SnapshotResponse = serde_json::from_value(snapshot).unwrap();
+    assert_eq!(snapshot.objects.len(), 1);
+    let remaining = &snapshot.objects[0];
+    let MutationOp::Put { body } = save_metadata_only.op else {
+        unreachable!()
+    };
+    assert_eq!(remaining.object_id, connection);
+    assert_eq!(remaining.body.as_ref(), Some(&body));
+    assert_eq!(remaining.writer_device_id, phone.device.id);
+}
+
 #[tokio::test]
 async fn revisions_sequences_and_conflicts() {
     let srv = server!();
