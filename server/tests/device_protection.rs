@@ -336,6 +336,49 @@ async fn approval_by_a_device_past_quarantine_lifts_it() {
 }
 
 #[tokio::test]
+async fn midnight_issuances_count_once_toward_both_account_limits() {
+    let srv = server!(protect);
+    let db = &srv.state.db;
+    let account = uuid::Uuid::new_v4();
+    let device = uuid::Uuid::new_v4();
+    let charge = |at: &str| {
+        let at = at.parse::<chrono::DateTime<chrono::Utc>>().unwrap();
+        async move {
+            let mut tx = db.begin().await.unwrap();
+            let exceeded: Option<(String, i32)> =
+                sqlx::query_as(include_str!("../src/devices/envelope_limits.sql"))
+                    .bind(at)
+                    .bind(account)
+                    .bind(device)
+                    .bind(2_i64)
+                    .bind(3_i64)
+                    .bind(9_i64)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .unwrap();
+            if exceeded.is_some() {
+                tx.rollback().await.unwrap();
+            } else {
+                tx.commit().await.unwrap();
+            }
+            exceeded
+        }
+    };
+    assert_eq!(charge("2026-11-20T00:10:00Z").await, None);
+    assert_eq!(charge("2026-11-20T00:15:00Z").await, None);
+    assert_eq!(
+        charge("2026-11-20T00:30:00Z").await,
+        Some(("account_hour".into(), 1800))
+    );
+    assert_eq!(charge("2026-11-20T01:10:00Z").await, None);
+    assert_eq!(
+        charge("2026-11-20T01:20:00Z").await,
+        Some(("account_day".into(), 81600))
+    );
+    assert_eq!(charge("2026-11-21T00:01:00Z").await, None);
+}
+
+#[tokio::test]
 async fn unlock_material_is_limited_per_account_and_mailed_once() {
     let srv = server!(protect);
     let a = srv.new_account().await;

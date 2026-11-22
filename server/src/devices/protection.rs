@@ -186,62 +186,31 @@ pub async fn meter_unlock_material(
     let user = Uuid::from(auth.user_id);
     let device = Uuid::from(auth.device_id);
     let mut tx = state.db.begin().await?;
-    let fresh = sqlx::query(
+    let issued_at: Option<DateTime<Utc>> = sqlx::query_scalar(
         "INSERT INTO envelope_issuances (device_id, vault_id, window_start)
          VALUES ($1, $2, date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
-         ON CONFLICT DO NOTHING",
+         ON CONFLICT DO NOTHING RETURNING now()",
     )
     .bind(device)
     .bind(Uuid::from(vault_id))
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        > 0;
-    if !fresh {
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(issued_at) = issued_at else {
         return Ok(());
-    }
-    // Always the same order (account hour, account day, device hour): no
-    // deadlocks between concurrent hand-outs of one account.
-    let limits = [
-        (
-            "envelopes_account",
-            user,
-            Window::Hour,
-            prot.envelopes_per_account_per_hour,
-        ),
-        (
-            "envelopes_account",
-            user,
-            Window::Day,
-            prot.envelopes_per_account_per_day,
-        ),
-        (
-            "envelopes_device",
-            device,
-            Window::Hour,
-            prot.envelopes_per_device_per_hour,
-        ),
-    ];
-    let mut exceeded: Option<(u32, &'static str)> = None;
-    for (scope, key, window, limit) in limits {
-        if limit == 0 {
-            continue;
-        }
-        let (count, left) = bump(&mut tx, scope, key, window).await?;
-        if count > i64::from(limit) {
-            let label = match (scope, window) {
-                ("envelopes_device", _) => "device_hour",
-                (_, Window::Hour) => "account_hour",
-                (_, Window::Day) => "account_day",
-            };
-            exceeded = Some((left, label));
-            break;
-        }
-    }
-    if let Some((retry_after, limit)) = exceeded {
+    };
+    let exceeded: Option<(String, i32)> = sqlx::query_as(include_str!("envelope_limits.sql"))
+        .bind(issued_at)
+        .bind(user)
+        .bind(device)
+        .bind(i64::from(prot.envelopes_per_account_per_hour))
+        .bind(i64::from(prot.envelopes_per_account_per_day))
+        .bind(i64::from(prot.envelopes_per_device_per_hour))
+        .fetch_optional(&mut *tx)
+        .await?;
+    if let Some((limit, retry_after)) = exceeded {
         // Nothing of this attempt is kept: a refused hand-out never counts.
         drop(tx);
-        metrics::counter!("cc_envelope_rate_limited_total", "limit" => limit).increment(1);
+        metrics::counter!("cc_envelope_rate_limited_total", "limit" => limit.clone()).increment(1);
         AuditEvent::new(AuditType::EnvelopeRateLimited)
             .user(auth.user_id)
             .device(auth.device_id)
@@ -253,7 +222,7 @@ pub async fn meter_unlock_material(
         if let Err(err) = abuse_mail(state, auth).await {
             tracing::warn!(code = ?err.code(), "envelope abuse mail failed");
         }
-        return Err(AppError::envelope_rate_limited(retry_after));
+        return Err(AppError::envelope_rate_limited(retry_after as u32));
     }
     AuditEvent::new(AuditType::EnvelopeIssued)
         .user(auth.user_id)
