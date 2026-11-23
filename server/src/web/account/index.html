@@ -19,12 +19,22 @@
   <script src="/account/app.js" defer></script>
 </head>
 <body>
-  <main class="card" id="app" aria-live="polite">
-    <div class="brand">ConsoleCrypt</div>
-    <noscript>
-      <h1>JavaScript</h1>
-      <p>Enable JavaScript to use this page. Включите JavaScript, чтобы пользоваться этой страницей.</p>
-    </noscript>
+  <main class="card">
+    <header>
+      <strong>ConsoleCrypt</strong>
+      <label class="language" hidden>
+        <span data-message="language"></span>
+        <select id="language">
+          <option lang="ru" value="ru">Русский</option>
+          <option lang="en" value="en">English</option>
+          <option lang="es" value="es">Español</option>
+          <option lang="zh-Hans" value="zh">简体中文</option>
+        </select>
+      </label>
+    </header>
+    <div id="app" aria-live="polite">
+      <noscript><p>{{NO_SCRIPT}}</p></noscript>
+    </div>
   </main>
 </body>
 </html>

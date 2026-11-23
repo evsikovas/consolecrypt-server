@@ -16,8 +16,9 @@
 
 use crate::config::MailLanguage;
 use crate::state::AppState;
-use axum::extract::State;
-use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
+use axum::extract::{Query, State};
+use axum::http::header::{ACCEPT_LANGUAGE, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -54,14 +55,67 @@ fn page(content_type: &'static str, body: String) -> Response {
         .into_response()
 }
 
-async fn index(State(state): State<AppState>) -> Response {
-    let lang = match state.config.mail.language {
+#[derive(serde::Deserialize)]
+struct PageQuery {
+    lang: Option<String>,
+}
+
+fn supported_language(tag: &str) -> Option<&'static str> {
+    match tag.trim().split('-').next()?.to_ascii_lowercase().as_str() {
+        "ru" => Some("ru"),
+        "en" => Some("en"),
+        "es" => Some("es"),
+        "zh" => Some("zh-Hans"),
+        _ => None,
+    }
+}
+
+fn browser_language(header: &str) -> Option<&'static str> {
+    let mut best = None;
+    let mut best_weight = 0.0;
+    for entry in header.split(',') {
+        let (tag, weight) = entry.split_once(';').unwrap_or((entry, "q=1"));
+        let Some(lang) = supported_language(tag) else {
+            continue;
+        };
+        let weight = weight
+            .trim()
+            .strip_prefix("q=")
+            .and_then(|q| q.parse::<f32>().ok());
+        if let Some(q) = weight.filter(|q| *q > best_weight && *q <= 1.0) {
+            best = Some(lang);
+            best_weight = q;
+        }
+    }
+    best
+}
+
+async fn index(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PageQuery>,
+) -> Response {
+    let default = match state.config.mail.language {
         MailLanguage::Ru => "ru",
         MailLanguage::En => "en",
     };
+    let lang = query
+        .lang
+        .as_deref()
+        .and_then(supported_language)
+        .or_else(|| browser_language(headers.get(ACCEPT_LANGUAGE)?.to_str().ok()?))
+        .unwrap_or(default);
+    let hint = match lang {
+        "ru" => "Включите JavaScript, чтобы пользоваться этой страницей.",
+        "es" => "Activa JavaScript para usar esta página.",
+        "zh-Hans" => "请启用 JavaScript 以使用此页面。",
+        _ => "Enable JavaScript to use this page.",
+    };
     page(
         "text/html; charset=utf-8",
-        INDEX_HTML.replace("{{LANG}}", lang),
+        INDEX_HTML
+            .replace("{{LANG}}", lang)
+            .replace("{{NO_SCRIPT}}", hint),
     )
 }
 

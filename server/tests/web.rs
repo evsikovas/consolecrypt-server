@@ -135,6 +135,42 @@ async fn account_page_follows_the_mail_language() {
 }
 
 #[tokio::test]
+async fn account_page_negotiates_the_four_ui_languages() {
+    let srv = server!(|c| {
+        c.web_account = true;
+    });
+    for (path, browser, expected, hint) in [
+        ("/account?lang=es-MX", "en", "es", "Activa JavaScript"),
+        ("/account/?lang=zh", "ru", "zh-Hans", "请启用 JavaScript"),
+        (
+            "/account",
+            "fr, ru;q=0.3, en-US;q=0.8",
+            "en",
+            "Enable JavaScript",
+        ),
+        (
+            "/account?lang=unknown",
+            "zh-CN, es;q=0.8",
+            "zh-Hans",
+            "请启用 JavaScript",
+        ),
+        ("/account", "es;q=0, ru", "ru", "Включите JavaScript"),
+    ] {
+        let response = srv
+            .http
+            .get(srv.url(path))
+            .header("accept-language", browser)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let html = response.text().await.unwrap();
+        assert!(html.contains(&format!("<html lang=\"{expected}\">")));
+        assert!(html.contains(hint));
+    }
+}
+
+#[tokio::test]
 async fn email_link_points_at_the_account_page_and_its_code_works() {
     let srv = server!(|c| {
         c.web_account = true;
